@@ -44,7 +44,7 @@
       !isReady() && offline
         ? "The speech model needs downloading once, with signal. Your recording is saved."
         : /fetch|network|load/i.test(message) && !/speech library/.test(message)
-          ? "Couldn't download the speech model. Check your signal and try again. Your recording is saved."
+          ? `Couldn't download the speech model (${message}). Check your signal and try again. Your recording is saved.`
           : `Couldn't turn this into text (${message}). Your recording is saved.`
     );
     err.code = !isReady() && offline ? "NEEDS_MODEL" : "FAILED";
@@ -95,8 +95,18 @@
     return rendered.getChannelData(0);
   }
 
+  /** The speech model may be installed with the app (get-model.js). If so, there's nothing to download. */
+  async function checkBundled() {
+    try {
+      const r = await fetch("models/Xenova/whisper-base.en/onnx/decoder_model_merged_quantized.onnx", { method: "HEAD" });
+      if (r.ok && !/text\/html/.test(r.headers.get("content-type") || "")) { markReady(); return true; }
+    } catch (e) { /* not bundled */ }
+    return false;
+  }
+
   const real = {
     isReady,
+    checkBundled,
     download(onProgress) {
       if (!navigator.onLine) return Promise.reject(Object.assign(new Error("Downloading the speech model needs signal."), { code: "NEEDS_MODEL" }));
       return start({ type: "load" }, onProgress);

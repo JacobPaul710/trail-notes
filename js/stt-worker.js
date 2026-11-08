@@ -3,6 +3,7 @@
 // The library is loaded with import() inside a try, so if it can't load we can say exactly why
 // (a static import that fails gives the page no message at all).
 const LIB_URLS = [
+  new URL("../vendor/transformers.min.js", import.meta.url).href,   // installed with the app (get-model.js)
   "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js",
   "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/+esm",
   "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1",
@@ -25,8 +26,16 @@ async function loadLib() {
     }
   }
   if (!lib) throw new Error(`couldn't load the speech library from the internet (${problems.join("; ")})`);
-  lib.env.allowLocalModels = false;
+  lib.env.allowLocalModels = true;
+  lib.env.localModelPath = new URL("../models/", import.meta.url).href;   // installed with the app, if get-model.js was run
+  lib.env.allowRemoteModels = true;                                        // otherwise: download it once
   lib.env.useBrowserCache = true;
+  // Use the wasm files installed with the app only if they are really there; otherwise the library fetches its own.
+  try {
+    const local = new URL("../vendor/", import.meta.url).href;
+    const r = await fetch(local + "manifest.json", { method: "HEAD" });
+    if (r.ok && !/text\/html/.test(r.headers.get("content-type") || "")) lib.env.backends.onnx.wasm.wasmPaths = local;
+  } catch (e) { /* default */ }
   return lib;
 }
 

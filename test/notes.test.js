@@ -194,6 +194,72 @@ test("summary: both gaining and losing, multiple endings with a named path", () 
       grade: { status: "answered", value: "12%", number: 12 }, ends: { status: "answered", values: ["Connects to another path", "Downed tree"] } } };
   const text = S.toText(S.build(card));
   assert.match(text, /It both gains and loses elevation at a 12% grade variation\./);
-  assert.match(text, /it ends at its junction with Ellis Peak Road and at a downed tree and provides a turn-around/);
+  assert.match(text, /it ends at its junction with Ellis Peak Road \[paved or unpaved\] and at a downed tree and provides a turn-around/);
   assert.equal(S.endsAtSpeech("it connects to ellis peak road and then ends"), "Ellis Peak Road");
+});
+
+test("summary: ends on a paved path, and a note for the data curating team goes last", () => {
+  const S = require("../js/summary");
+  const card = { name: "9N14", startFrom: "Hwy-88", areaText: "flourishing fir", endsAt: "10N50", endsPaved: "Paved",
+    curatorOn: true, curatorNote: "GPX files need stitching",
+    answers: { type: { status: "answered", value: "Point-to-point" }, ends: { status: "answered", values: ["Connects to another path"] } } };
+  const text = S.toText(S.build(card));
+  assert.match(text, /ends at the paved 10N50 junction/);
+  assert.ok(text.endsWith("*GPX files need stitching"), text.slice(-60));
+  const paras = S.build(card);
+  assert.ok(paras.flat().some((x) => x.curator));
+  // off: nothing added
+  assert.ok(!S.toText(S.build({ ...card, curatorOn: false })).includes("GPX"));
+});
+
+// ---------- length and time ----------
+
+test("length and time are read from typed or spoken text", () => {
+  const f = P.parseLengthTime;
+  assert.deepEqual(f("2.4 miles, 1 hour 30 minutes"), { miles: 2.4, hours: 1.5 });
+  assert.deepEqual(f("two point four miles and an hour and a half"), { miles: 2.4, hours: 1.5 });
+  assert.deepEqual(f("3 miles 45 minutes"), { miles: 3, hours: 0.75 });
+  assert.deepEqual(f("five miles, one hour fifteen minutes"), { miles: 5, hours: 1.25 });
+  assert.deepEqual(f("about 12 miles took two hours"), { miles: 12, hours: 2 });
+  assert.deepEqual(f("hello"), { miles: null, hours: null });
+});
+
+test("miles and time are read separately", () => {
+  assert.equal(P.parseMiles("2.4 miles"), 2.4);
+  assert.equal(P.parseMiles("two point four"), 2.4);
+  assert.equal(P.parseMiles("abc"), null);
+  assert.equal(P.parseHours("1:30"), 1.5);
+  assert.equal(P.parseHours("90 min"), 1.5);
+  assert.equal(P.parseHours("an hour and a half"), 1.5);
+  assert.equal(P.parseHours("2"), 2);
+});
+
+test("a tree to drive over counts as a log crossing", () => {
+  const r = pickAnswers("it has a big tree to drive over");
+  assert.equal(r.obstacles.status, "answered");
+  assert.deepEqual(r.obstacles.values, ["Log crossing"]);
+});
+
+test("Nov 8 speech: direction, brush rub, difficulty, point to point, connects", () => {
+  const a = pickAnswers("This fork south, it goes on dirt and gravel mixed. It does have brush rub. Difficulty is a one. It's a points of point, so it ends connecting to another trail.");
+  assert.equal(a.heads.value, "South");
+  assert.equal(a.brush.status, "unclear");
+  assert.deepEqual(a.brush.options, ["Slight", "Moderate", "Heavy"]);
+  assert.equal(a.level.value, "Level 1");
+  assert.equal(a.type.value, "Point-to-point");
+  assert.ok(a.ends.values.includes("Connects to another path"));
+  assert.equal(pickAnswers("difficulty is a ten").level.value, "Level 10");
+  assert.equal(pickAnswers("no brush rub at all").brush.value, "None");
+  assert.equal(pickAnswers("this fork southeast").heads.value, "Southeast");
+});
+
+test("exact Nov 8 sentence, with hyphenated points-of-point", () => {
+  const a = pickAnswers("This fork south that goes on dirt and gravel mixed, it goes over ridges, it crosses creeks, it only loses elevation, it does have brush rub, difficulty is a one, it's a double track, it's got a 5% grade, it's a points-of-point, it ends connecting to another trail and its obstacle is ruts and whoops.");
+  assert.equal(a.heads.value, "South");
+  assert.equal(a.level.value, "Level 1");
+  assert.equal(a.type.value, "Point-to-point");
+  assert.ok(a.ends.values.includes("Connects to another path"));
+  assert.equal(a.brush.status, "unclear");
+  assert.equal(pickAnswers("it's out-and-back").type.value, "Out-and-back");
+  assert.equal(findGrade("8-10 percent grade").heard, 10);
 });

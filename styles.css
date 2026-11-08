@@ -74,6 +74,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
   border-bottom: 1px solid var(--side-line);
 }
 .brand-name { font-size: 19px; font-weight: 700; color: var(--accent); flex: 1; }
+.brand-icon { height: 34px; width: 34px; display: block; flex-shrink: 0; margin-right: 8px; border-radius: 8px; }
 .brand-mark { width: 26px; height: 26px; stroke: var(--accent); stroke-width: 1.6; }
 .icon-btn { width: 44px; height: 44px; border: 0; background: transparent; display: flex; align-items: center; justify-content: center; border-radius: 10px; cursor: pointer; flex-shrink: 0; }
 .icon-btn:active { background: var(--accent-soft); }
@@ -251,8 +252,14 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 
 /* processing */
 .processing { display: flex; flex-direction: column; align-items: center; gap: 16px; padding: 18px 0 6px; text-align: center; }
-.spinner { width: 54px; height: 54px; border-radius: 50%; border: 5px solid var(--accent-soft); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
-@keyframes spin { to { transform: rotate(360deg); } }
+/* loader wheel (same as Trail Engine): a pin riding a dotted trail around a little topo hill */
+.spinner { width: 72px; height: 72px; color: var(--green); flex-shrink: 0; }
+.spinner.sm { width: 34px; height: 34px; }
+.spinner svg { width: 100%; height: 100%; display: block; overflow: visible; }
+.spinner .wheel-ring { transform-origin: 32px 32px; animation: wheel-spin 5s linear infinite reverse; }
+.spinner .wheel-orbit { transform-origin: 32px 32px; animation: wheel-spin 1.9s cubic-bezier(.45,.05,.55,.95) infinite; }
+@keyframes wheel-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner .wheel-orbit { animation-duration: 4s; } .spinner .wheel-ring { animation-duration: 12s; } }
 .processing p { margin: 0; color: var(--muted); font-size: 14px; }
 
 .toast { pointer-events: none; position: fixed; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 72px); transform: translateX(-50%); z-index: 50; max-width: 90vw; padding: 12px 16px; border-radius: 12px; background: var(--title); color: var(--bg); font-size: 14px; font-weight: 600; box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4); }
@@ -356,9 +363,39 @@ input:focus, textarea:focus { outline: none; border-color: var(--accent); }
 .area-desc-panel { margin-top: 18px; display: flex; flex-direction: column; gap: 8px; }
 .btn-warn { min-height: 48px; border-radius: 12px; border: 1px solid color-mix(in srgb, var(--amber) 70%, transparent); background: color-mix(in srgb, var(--amber) 22%, var(--card)); color: inherit; font-weight: 700; font-size: 16px; cursor: pointer; }
 .btn-warn.wide, .btn-primary.wide { width: 100%; }
-.trail-card.abandoned { border-color: color-mix(in srgb, var(--amber) 70%, transparent); background: color-mix(in srgb, var(--amber) 12%, var(--card)); }
+.trail-card.abandoned { border-color: color-mix(in srgb, var(--red) 70%, transparent); background: color-mix(in srgb, var(--red) 12%, var(--card)); }
+.trail-card.abandoned .trail-main span { color: var(--red); }
+.trail-card.inprogress { border-color: color-mix(in srgb, var(--amber) 70%, transparent); background: color-mix(in srgb, var(--amber) 12%, var(--card)); }
 .trail-card.done { background: color-mix(in srgb, var(--green) 9%, var(--card)); }
 .area-ring { width: 44px; height: 44px; }
 .poi-bubbles-hint { font-size: 13px; color: var(--muted); }
 #complete-note:empty { display: none; }
 .missing-list { margin: 0 0 14px 20px; padding: 0; font-size: 15px; line-height: 1.6; }
+.curator-panel { display: flex; flex-direction: column; gap: 8px; }
+.curator-panel textarea { width: 100%; border-radius: 12px; border: 1px solid var(--btn-line); padding: 10px 12px; font-size: 16px; background: var(--card); color: inherit; }
+.curator-note { color: #4da3ff; font-weight: 800; }
+
+/* v0.11 */
+.back-btn { display: flex; align-items: center; gap: 2px; min-height: 44px; padding: 0 12px 0 6px; border: 0; background: transparent; color: var(--accent-ink); font-size: 16px; font-weight: 700; border-radius: 10px; cursor: pointer; flex-shrink: 0; }
+.back-btn svg { width: 22px; height: 22px; stroke: currentColor; fill: none; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+.back-btn:active { background: var(--accent-soft); }
+.sync-view { font-size: 12px; font-weight: 700; color: var(--accent-ink); text-decoration: underline; }
+.sync-view[hidden] { display: none; }
+.confirm-row a.btn-ghost { display: inline-flex; align-items: center; text-decoration: none; }
+button > .spinner.sm { display: inline-block; vertical-align: middle; width: 24px; height: 24px; margin-right: 8px; }
+
+.curator-panel input[type="text"], .curator-panel .small-label + input { width: 100%; border-radius: 12px; border: 1px solid var(--btn-line); padding: 12px; font-size: 16px; background: var(--card); color: inherit; }
+
+.heard-text { margin: 0 0 12px; padding: 10px 12px; border-radius: 10px; background: var(--card); font-style: italic; line-height: 1.45; }
+
+.found-list { margin: 0 0 12px; padding-left: 18px; line-height: 1.6; }
+
+/* back buttons sit centered at the top of the trail list and of a trail */
+#view-area .top, #view-card .top { flex-wrap: wrap; row-gap: 4px; }
+#area-back, #card-back { order: -1; flex: 0 0 100%; justify-content: center; }
+/* the loader wheel, on top of the page (same wheel as Trail Engine) */
+.wheel-overlay { position: fixed; inset: 0; z-index: 60; display: flex; align-items: center; justify-content: center; padding: 20px; background: color-mix(in srgb, var(--bg) 78%, transparent); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+.wheel-overlay[hidden] { display: none; }
+.wheel-box { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 26px 30px; border-radius: 16px; background: var(--card); border: 1px solid var(--side-line); max-width: 340px; text-align: center; }
+.wheel-box .processing { padding: 0; }
+.wheel-box .spinner { width: 92px; height: 92px; }

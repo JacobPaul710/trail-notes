@@ -160,7 +160,87 @@
     return "";
   }
 
-  const api = { normalizeDate, parseTrailList, sheetFromLink, csvUrl, parseCSV, rowsToTrails, areaFromRows, areasFromRows };
+  const WORDS = { zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13, fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18, nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60, seventy: 70, eighty: 80, ninety: 90, a: 1, an: 1 };
+
+  /** "two point four" / "2.4" / "twenty five" -> number, or null. */
+  function wordsToNumber(text) {
+    const t = String(text || "").toLowerCase().replace(/-/g, " ").trim();
+    if (/^\d+(\.\d+)?$/.test(t)) return Number(t);
+    const parts = t.split(/\s+/).filter((w) => w !== "and");
+    const pointAt = parts.indexOf("point");
+    const whole = (ws) => {
+      let sum = 0;
+      for (const w of ws) {
+        if (/^\d+$/.test(w)) sum += Number(w);
+        else if (w in WORDS) sum += WORDS[w];
+        else return null;
+      }
+      return ws.length ? sum : null;
+    };
+    if (pointAt >= 0) {
+      const intPart = pointAt === 0 ? 0 : whole(parts.slice(0, pointAt));
+      const digits = parts.slice(pointAt + 1).map((w) => (/^\d$/.test(w) ? w : w in WORDS && WORDS[w] < 10 ? String(WORDS[w]) : null));
+      if (intPart === null || !digits.length || digits.includes(null)) return null;
+      return Number(`${intPart}.${digits.join("")}`);
+    }
+    return whole(parts);
+  }
+
+  /**
+   * "2.4 miles, 1 hour 30 minutes" / "two point four miles and an hour and a half" ->
+   * { miles, hours } (hours as a decimal). Missing or unclear parts are null.
+   */
+  function parseLengthTime(text) {
+    const s = String(text || "").toLowerCase().replace(/,/g, " ").replace(/\s+/g, " ");
+    const NUM = "((?:\\d+(?:\\.\\d+)?)|(?:[a-z]+(?: (?:and )?[a-z]+){0,4}))";
+    let miles = null, hours = null;
+    const mi = s.match(new RegExp(NUM + " ?(?:miles?|mi)\\b"));
+    if (mi) {
+      const ws = mi[1].split(" ");
+      const isNum = (w) => /^\d/.test(w) || w in WORDS || w === "point";
+      const k = ws.findIndex(isNum);
+      miles = k >= 0 ? wordsToNumber(ws.slice(k).join(" ")) : null;
+    }
+    let h = 0, any = false;
+    if (/\bhalf an hour\b|\ba half hour\b/.test(s)) { h += 0.5; any = true; }
+    else {
+      const hr = s.match(/(\d+(?:\.\d+)?|[a-z]+(?: [a-z]+){0,3}) ?(?:hours?|hrs?|h)\b/);
+      if (hr) {
+        const n = wordsToNumber(hr[1].split(" ").slice(-3).join(" ")) ?? wordsToNumber(hr[1].split(" ").slice(-2).join(" ")) ?? wordsToNumber(hr[1].split(" ").slice(-1)[0]);
+        if (n !== null) { h += n; any = true; }
+      } else if (/\ban hour\b/.test(s)) { h += 1; any = true; }
+      if (/\band a half\b|\ba half\b/.test(s) && any && !/half an hour/.test(s)) h += 0.5;
+    }
+    const mn = s.match(/(\d+|[a-z]+(?: [a-z]+){0,2}) ?(?:minutes?|mins?|m)\b/);
+    if (mn) {
+      const w = mn[1].split(" ");
+      let n = null;
+      for (let k = Math.min(3, w.length); k >= 1 && n === null; k--) n = wordsToNumber(w.slice(-k).join(" "));
+      if (n !== null) { h += n / 60; any = true; }
+    }
+    if (any) hours = Math.round(h * 100) / 100;
+    return { miles: miles !== null && isFinite(miles) ? miles : null, hours };
+  }
+
+  /** Just the miles: "2.4", "2.4 miles", "two point four". null if unclear. */
+  function parseMiles(text) {
+    const t = String(text || "").toLowerCase().replace(/\b(miles?|mi)\b/g, "").trim();
+    if (!t) return null;
+    const n = wordsToNumber(t);
+    return n !== null && isFinite(n) && n > 0 ? n : null;
+  }
+
+  /** Just the time, as decimal hours: "1:30", "1 hour 30 minutes", "90 min", "an hour and a half". null if unclear. */
+  function parseHours(text) {
+    const t = String(text || "").trim();
+    let m = t.match(/^(\d+):(\d{2})$/);
+    if (m) return Math.round((Number(m[1]) + Number(m[2]) / 60) * 100) / 100;
+    if (/^\d+(\.\d+)?$/.test(t)) return Number(t); // a bare number means hours
+    const h = parseLengthTime(t).hours;
+    return h !== null && h > 0 ? h : null;
+  }
+
+  const api = { parseMiles, parseHours, parseLengthTime, wordsToNumber, normalizeDate, parseTrailList, sheetFromLink, csvUrl, parseCSV, rowsToTrails, areaFromRows, areasFromRows };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else (root.TN = root.TN || {}).parse = api;
 })(typeof self !== "undefined" ? self : this);

@@ -37,6 +37,19 @@
   };
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   let toastTimer = null;
+  // The loader (same wheel as Trail Engine): a pin riding a dotted trail around a little topo hill.
+  // loader() = big, loader(true) = small.
+  function loader(small) {
+    const d = el("div", small ? "spinner sm" : "spinner");
+    d.setAttribute("role", "img");
+    d.setAttribute("aria-label", "Working");
+    d.innerHTML = '<svg class="wheel" viewBox="0 0 64 64" aria-hidden="true">' +
+      '<g fill="none" stroke="currentColor" stroke-opacity=".25" stroke-width="1.5"><ellipse cx="32" cy="32" rx="22" ry="16"/><ellipse cx="32" cy="32" rx="14" ry="10"/><ellipse cx="32" cy="32" rx="6" ry="4"/></g>' +
+      '<circle class="wheel-ring" cx="32" cy="32" r="27" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="1 8"/>' +
+      '<g class="wheel-orbit"><path d="M32 3.5c-3.3 0-5.5 2.3-5.5 5 0 2.8 2.6 4.4 5.5 8 2.9-3.6 5.5-5.2 5.5-8 0-2.7-2.2-5-5.5-5z" fill="#f4efe0"/><circle cx="32" cy="8.5" r="1.9" fill="#1c3a2a"/></g></svg>';
+    return d;
+  }
+
   function toast(msg) {
     const t = $("toast");
     t.textContent = msg;
@@ -69,7 +82,11 @@
     if (card.startFrom && card.startPaved) answered++;
     if ((card.pois && card.pois.length) || card.noPois) answered++;
     if (areaTextFor(card, area)) answered++;
-    return { answered, unclear, total: CRITERIA.length + 3, waiting: hasWaiting(card) };
+    if (card.miles > 0 && card.hours > 0) answered++;
+    if (card.restrictions && card.restrictions.length) answered++;
+    let total = CRITERIA.length + 5;
+    if (needsEndsPaved(card)) { total++; if (card.endsPaved) answered++; }
+    return { answered, unclear, total, waiting: hasWaiting(card) };
   }
   // Trails that still have a recording waiting to be turned into text don't count as complete.
   async function loadWaiting() {
@@ -77,6 +94,10 @@
     state.waiting = new Set(recs.filter((r) => r.status !== "processed").map((r) => cardKey(r.area || "", r.card)));
   }
   const hasWaiting = (c) => !!(state.waiting && state.waiting.has(cardKey(c.area || "", c.number)));
+  const needsEndsPaved = (card) => {
+    const a = card.answers && card.answers.ends;
+    return !!(a && a.status === "answered" && (a.values || [a.value]).includes("Connects to another path"));
+  };
   const isFinished = (c) => c.status === "done" || c.status === "abandoned";
   const REASONS = ["Fallen tree too early", "Private gate too early", "Overgrown too early"];
 
@@ -109,12 +130,13 @@
     s.append(circle("rgba(128,128,128,0.25)"));
     const g = (p.answered / p.total) * C, y = (p.unclear / p.total) * C;
     if (g) s.append(circle("var(--green)", g, 0));
-    if (y) s.append(circle("var(--amber)", y, g));
+    if (y) s.append(circle(p.abandoned ? "var(--red)" : "var(--amber)", y, g));
     wrap.append(s);
     const all = p.answered === p.total && !p.waiting;
     const label = p.abandoned ? "×" : p.unclear ? "!" : all ? "✓" : `${p.answered}/${p.total}`;
     const txt = el("span", "ring-text", label);
-    if (p.unclear) txt.style.color = "var(--amber)";
+    if (p.abandoned) txt.style.color = "var(--red)";
+    else if (p.unclear) txt.style.color = "var(--amber)";
     else if (all) txt.style.color = "var(--green)";
     wrap.append(txt);
     return wrap;
@@ -174,6 +196,186 @@
 
   // ---------- Home: your areas ----------
 
+  // A message that stays until you tap OK (instead of vanishing on a timer).
+  function notice(title, message, extra) {
+    const body = el("div");
+    body.append(el("p", "confirm-text", message));
+    const row = el("div", "confirm-row");
+    if (extra) row.append(extra);
+    const ok = el("button", "btn-primary slim", "OK");
+    ok.type = "button";
+    ok.addEventListener("click", closeSheet);
+    row.append(ok);
+    body.append(row);
+    openSheet(title, body);
+  }
+
+  function driveLink(label) {
+    const url = TN.drive.folderUrl();
+    if (!url) return null;
+    const a = el("a", "btn-ghost slim-btn", label || "Open in Drive");
+    a.href = url; a.target = "_blank"; a.rel = "noopener";
+    return a;
+  }
+
+  // ---------- Google Drive sync ----------
+
+  const drive = TN.drive;
+
+  function syncName(area, card) {
+    const clean = String(area.name).replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
+    return `${clean} - ${String(card.number).padStart(4, "0")}.json`;
+  }
+
+  // Everything Trail Engine needs to know about one trail.
+  function syncPayload(area, card) {
+    const answers = {};
+    for (const c of CRITERIA) {
+      const a = card.answers[c.id];
+      if (a && a.status === "answered") answers[c.id] = { label: c.label, value: a.value, ...(a.values ? { values: a.values } : {}), ...(a.number ? { number: a.number } : {}) };
+    }
+    const areaText = areaTextFor(card, area);
+    return {
+      app: "trail-notes", version: 1,
+      area: area.name, areaId: area.id, number: card.number, name: card.name, date: card.date || "",
+      status: card.status || "in-progress", savedForLater: !!card.savedForLater, abandonReason: card.abandonReason || "", finishedAt: card.finishedAt || null,
+      startFrom: card.startFrom || "", startPaved: card.startPaved || "", endsAt: card.endsAt || "", endsPaved: card.endsPaved || "",
+      curatorNote: card.curatorOn ? String(card.curatorNote || "").trim() : "",
+      miles: card.miles > 0 ? card.miles : "", hours: card.hours > 0 ? card.hours : "", milesText: card.milesText || "", timeText: card.timeText || "",
+      areaDescription: areaText, customAreaDescription: !!card.customArea,
+      level: card.answers.level && card.answers.level.status === "answered" ? card.answers.level.value : "",
+      answers, restrictions: card.restrictions || [], noPois: !!card.noPois, pois: (card.pois || []).map((p) => ({ type: p.type, name: p.note || "" })),
+      summary: TN.summary.toText(TN.summary.build({ ...card, areaText })),
+      said: (card.said || []).map((x) => x.text),
+      updatedAt: card.updatedAt, writtenAt: Date.now(),
+    };
+  }
+
+  const isWaiting = (c) => !!c.updatedAt && (!c.syncedAt || c.updatedAt > c.syncedAt);
+
+  async function renderSync(all) {
+    all = all || (await db.all("areacards"));
+    const waiting = all.filter(isWaiting).length;
+    const last = (await db.get("kv", "lastSync")) || 0;
+    const on = navigator.onLine;
+    const btn = $("sync-btn");
+    state.syncWaiting = waiting;
+    if (state.syncing) return;
+    const who = drive.account();
+    if (!$("sync-dot").classList.contains("link-dot")) $("sync-dot").replaceWith(Object.assign(el("span", "link-dot"), { id: "sync-dot" }));
+    const dot = $("sync-dot");
+    if (!drive.linked()) {
+      dot.className = "link-dot";
+      $("sync-title").textContent = waiting ? `${plural(waiting, "trail", "trails")} not backed up yet` : "Not synced yet";
+      $("sync-sub").textContent = "Sign in with Google to back up your trails";
+      btn.textContent = "Sign in to sync";
+      btn.disabled = !on;
+    } else if (state.syncError) {
+      dot.className = "link-dot bad";
+      $("sync-title").textContent = "Sync problem";
+      $("sync-sub").textContent = state.syncError;
+      btn.textContent = "Try again";
+      btn.disabled = !on;
+    } else if (waiting) {
+      dot.className = "link-dot idle";
+      $("sync-title").textContent = `${plural(waiting, "trail", "trails")} waiting to sync`;
+      $("sync-sub").textContent = `${who ? who + " · " : ""}${on ? "Tap Sync to send them to your Drive" : "they'll send when you have signal"}`;
+      btn.textContent = "Sync";
+      btn.disabled = !on;
+    } else {
+      dot.className = "link-dot ok";
+      $("sync-title").textContent = last ? `All synced · ${dayClock(last)}` : "Signed in · nothing to sync yet";
+      $("sync-sub").textContent = who ? `Signed in as ${who}` : "Signed in to Google";
+      btn.textContent = "Sync";
+      btn.disabled = !on;
+    }
+    const view = $("sync-view"), vurl = drive.linked() ? drive.folderUrl() : "";
+    view.hidden = !vurl;
+    if (vurl) view.href = vurl;
+    const g = $("drawer-google");
+    if (g) {
+      g.textContent = drive.linked() ? `Signed in${drive.account() ? ` as ${drive.account()}` : ""}. Trails save to the Trail Notes folder in your Drive.` : "Not signed in.";
+      $("drawer-signout").hidden = !drive.linked();
+      $("drawer-switch").hidden = !drive.linked();
+      $("drawer-redirect").textContent = `Sign-in address: ${drive.redirectUri()}`;
+    }
+  }
+
+  /**
+   * Finished trails that just synced go Planned -> Tracked on their area's Trail List tab.
+   * Trails saved for later don't touch the sheet. Never blocks the sync.
+   */
+  async function markTrackedOnSheets(cards) {
+    const groups = new Map();
+    for (const c of cards) {
+      const status = c.status === "done" ? "Tracked" : "";   // saved-for-later trails leave the sheet alone
+      if (!status) continue;
+      const a = state.areas.find((x) => x.id === c.area);
+      const sheet = a && a.sheetLink && a.sheetTab ? parse.sheetFromLink(a.sheetLink) : null;
+      if (!sheet) continue;
+      const k = `${sheet.id}|${a.sheetTab}|${status}`;
+      if (!groups.has(k)) groups.set(k, { id: sheet.id, tab: a.sheetTab, status, nums: [] });
+      groups.get(k).nums.push(c.number);
+    }
+    if (!groups.size) return "";
+    if (!drive.canEditSheets()) { toast("Sign in with Google once more so Trail Notes can update trail statuses on your sheet."); return ""; }
+    let tracked = 0;
+    for (const g of groups.values()) {
+      try {
+        const n = await drive.markStatus(g.id, g.tab, g.nums, g.status);
+        tracked += n;
+      } catch (e) { toast(`Couldn't update the sheet status (${e.message})`); }
+    }
+    return tracked ? ` ${plural(tracked, "trail", "trails")} marked Tracked on your sheet.` : "";
+  }
+
+  async function runSync(quiet) {
+    if (state.syncing) return;
+    if (!navigator.onLine) { if (!quiet) notice("No signal", "Sync needs signal. Your trails are safe on this phone and will send when you're back online."); return; }
+    if (!drive.tokenValid()) {
+      if (quiet) return;               // never yank you out of the app on its own
+      drive.signIn();                  // Google asks once, then sends you straight back and it syncs
+      return;
+    }
+    const all = await db.all("areacards");
+    const todo = all.filter(isWaiting);
+    if (!todo.length) {
+      await renderSync(all);
+      if (!quiet) notice("Nothing to send", all.some((c) => c.syncedAt) ? "Everything is already in your Drive." : "Nothing to send yet. Trails go to Drive once you've started on them.");
+      return;
+    }
+    state.syncing = true;
+    state.syncError = "";
+    $("sync-btn").disabled = true;
+    $("sync-title").textContent = `Syncing ${plural(todo.length, "trail", "trails")}…`;
+    $("sync-sub").textContent = "Sending to your Google Drive";
+    $("sync-dot").replaceWith(Object.assign(loader(true), { id: "sync-dot" }));
+    try {
+      const files = todo.map((card) => {
+        const area = state.areas.find((a) => a.id === card.area) || { id: card.area, name: card.area || "Trails" };
+        return { card, name: syncName(area, card), json: JSON.stringify(syncPayload(area, card), null, 1) };
+      });
+      await drive.upload(files, async (i) => {
+        const c = files[i].card;
+        await db.put("areacards", { ...c, syncedAt: Date.now() });   // keeps updatedAt, so it isn't "waiting" any more
+      });
+      await db.put("kv", Date.now(), "lastSync");
+      let sheetNote = "";
+      try { sheetNote = await markTrackedOnSheets(files.map((f) => f.card)); } catch (e) { sheetNote = ""; }
+      const who = drive.account();
+      const msg = `Sent ${plural(todo.length, "trail", "trails")} to the Trail Notes folder in your Google Drive${who ? ` (${who})` : ""}. To check, open Drive and look for that folder.${sheetNote}`;
+      if (quiet) toast(`Synced ${plural(todo.length, "trail", "trails")} to Drive`);
+      else notice("Synced", msg, driveLink("Open in Drive"));
+    } catch (e) {
+      state.syncError = e.code === "AUTH" ? "Google sign-in ran out. Tap Try again to sign in." : e.message;
+      if (quiet) toast(state.syncError); else notice("Sync problem", state.syncError);
+    } finally {
+      state.syncing = false;
+      state.cards = state.area ? new Map((await db.cardsIn(state.area.id)).map((c) => [c.number, c])) : state.cards;
+      await renderSync();
+    }
+  }
+
   async function renderAreas() {
     const all = await db.all("areacards");
     const list = $("area-list");
@@ -203,10 +405,8 @@
       b.addEventListener("click", () => openArea(a.id));
       list.append(b);
     }
-    setBar("home-progress", allTrails ? allDone / allTrails : 0);
     await loadWaiting();
-    $("sync-title").textContent = "Not synced yet";
-    $("sync-sub").textContent = "Sync comes in a later update";
+    await renderSync(all);
   }
 
   // ---------- one area: its trails ----------
@@ -218,6 +418,7 @@
     state.cards = new Map((await db.cardsIn(a.id)).map((c) => [c.number, c]));
     $("check-status").textContent = "";
     $("area-desc").value = a.desc || "";
+    if (state.descButton) state.descButton();
     await loadWaiting();
     renderArea();
     show("area");
@@ -239,6 +440,7 @@
       if (card.status === "abandoned") b.classList.add("abandoned");
       else if (card.status === "done") b.classList.add("done");
       else if (p.unclear) b.classList.add("check");
+      else if (card.savedForLater) b.classList.add("inprogress");
       const main = el("div", "trail-main");
       main.append(el("strong", "", t.name));
       let sub, subClass = "";
@@ -246,13 +448,14 @@
       else if (card.status === "done") sub = `Completed${p.waiting ? " · a recording still needs turning into text" : ""}`;
       else if (p.unclear) { sub = plural(p.unclear, "answer to check", "answers to check"); subClass = "check"; }
       else if (p.waiting) { sub = "A recording still needs turning into text"; subClass = "check"; }
+      else if (card.savedForLater) { sub = `In progress · ${p.answered} of ${p.total} answered`; subClass = "check"; }
       else sub = `${t.date ? t.date + " · " : ""}${p.answered ? `${p.answered} of ${p.total} answered` : "not started"}`;
       main.append(el("span", subClass, sub));
       b.append(el("span", "num-badge", `#${t.number}`), main, card.status === "abandoned" ? ring({ ...p, answered: 0, unclear: 1, total: 1, abandoned: true }) : ring(p));
       b.addEventListener("click", () => openCard(t.number));
       list.append(b);
     }
-    setBar("home-progress", a.trails.length ? finished / a.trails.length : 0);
+    setBar("area-progress", a.trails.length ? finished / a.trails.length : 0);
     $("check-sheet").hidden = !a.sheetLink;
   }
 
@@ -590,10 +793,10 @@
       body.append(ul);
       const row = el("div", "confirm-row");
       const back = el("button", "btn-ghost", "Keep working");
-      const go = el("button", "btn-primary slim", "Complete anyway");
+      const go = el("button", "btn-primary slim", "Save for later");
       back.type = go.type = "button";
       back.addEventListener("click", closeSheet);
-      go.addEventListener("click", async () => { closeSheet(); await finishTrail(); });
+      go.addEventListener("click", async () => { closeSheet(); await saveForLater(); });
       row.append(back, go);
       body.append(row);
       openSheet("Not everything is filled in", body);
@@ -602,9 +805,35 @@
     await finishTrail();
   }
 
+  // Not everything is filled in: keep the trail open and go back to the list. The sheet isn't touched.
+  // One time only: an earlier update wrongly flipped Completed trails to In progress. Put those back.
+  // (They still carry the date they were finished; trails saved for later never do.) Never runs again.
+  async function restoreCompleted() {
+    if (await db.get("kv", "restoredCompleted1")) return;
+    for (const c of await db.all("areacards")) {
+      if (c.status === "in-progress" && c.savedForLater && c.finishedAt) {
+        const fixed = { ...c, status: "done", updatedAt: Date.now() };
+        delete fixed.savedForLater;
+        await db.put("areacards", fixed);
+      }
+    }
+    await db.put("kv", true, "restoredCompleted1");
+  }
+
+  async function saveForLater() {
+    const card = state.current;
+    card.status = "in-progress";
+    card.savedForLater = true;
+    delete card.abandonReason;
+    delete card.finishedAt;
+    await saveCard();
+    await leaveToList();
+  }
+
   async function finishTrail() {
     const card = state.current;
     card.status = "done";
+    delete card.savedForLater;
     delete card.abandonReason;
     card.finishedAt = Date.now();
     await saveCard();
@@ -851,6 +1080,12 @@
     $("custom-area-text").hidden = !card.customArea;
     $("custom-area-text").value = card.customDesc || "";
     $("no-pois").checked = !!card.noPois;
+    $("curator-on").checked = !!card.curatorOn;
+    $("curator-text").hidden = !card.curatorOn;
+    $("curator-text").value = card.curatorNote || "";
+    $("lt-miles").value = card.milesText || "";
+    $("lt-time").value = card.timeText || "";
+    showLengthTime(card);
     setPaved(card.startPaved || "");
     $("marker-label").textContent = `Show marker #${card.number}`;
     renderMarkerNote();
@@ -859,8 +1094,23 @@
     show("card");
   }
 
+  function showLengthTime(card) {
+    const bits = [];
+    if (card.miles > 0) bits.push(`${card.miles} ${card.miles === 1 ? "mile" : "miles"}`);
+    if (card.hours > 0) {
+      const mins = Math.round(card.hours * 60);
+      bits.push(`${Math.floor(mins / 60) ? Math.floor(mins / 60) + " h " : ""}${mins % 60 ? (mins % 60) + " min" : ""}`.trim());
+    }
+    const need = [];
+    if (!(card.miles > 0)) need.push("miles");
+    if (!(card.hours > 0)) need.push("time");
+    const typed = card.milesText || card.timeText;
+    $("lt-read").textContent = typed ? `Read: ${bits.join(" · ") || "nothing yet"}${need.length ? ` (still need ${need.join(" and ")})` : ""}` : "";
+  }
+
   async function saveCard() {
     const c = state.current;
+    c.updatedAt = Date.now();   // anything newer than the last sync is waiting to go to Drive
     state.cards.set(c.number, c);
     await db.put("areacards", c);
   }
@@ -874,8 +1124,12 @@
     const out = [];
     const paras = TN.summary.build({ ...card, areaText: areaTextFor(card) });
     out.push(...TN.summary.gaps(paras));
-    if (!card.startPaved) out.push("paved or unpaved");
+    if (!card.startPaved) out.push("paved or unpaved (where it starts)");
+    if (needsEndsPaved(card) && !card.endsPaved) out.push("paved or unpaved (where it ends)");
     if (!(card.pois && card.pois.length) && !card.noPois) out.push("POIs (add one, or tick No POIs)");
+    if (!(card.restrictions && card.restrictions.length)) out.push("seasonal or legal restrictions (pick any, or No Restrictions Found)");
+    if (!(card.miles > 0)) out.push("length in miles");
+    if (!(card.hours > 0)) out.push("time it took");
     if (hasWaiting(card)) out.push("a recording still to turn into text");
     for (const c of CRITERIA) {
       const a = card.answers[c.id];
@@ -887,7 +1141,6 @@
   function renderCard() {
     const card = state.current;
     const p = progress(card, state.area);
-    setBar("card-progress", p.answered / p.total);
     const fin = card.status === "done" || card.status === "abandoned";
     $("complete-btn").hidden = fin;
     $("abandon-btn").hidden = fin;
@@ -909,6 +1162,38 @@
       list.append(b);
     }
     renderPois();
+    renderRestrictions();
+  }
+
+  // ---------- Seasonal or legal restrictions (same choices as the sheet's dropdown) ----------
+
+  const RESTRICTIONS = ["Permit Required", "One Way Only", "Seasonal Restrictions", "No Restrictions Found"];
+  const NO_RESTR = "No Restrictions Found";
+
+  function renderRestrictions() {
+    const card = state.current;
+    const chosen = new Set(card.restrictions || []);
+    const box = $("restr");
+    box.textContent = "";
+    for (const r of RESTRICTIONS) {
+      const b = el("button", `bubble${chosen.has(r) ? " on" : ""}`, r);
+      b.type = "button";
+      b.setAttribute("aria-pressed", String(chosen.has(r)));
+      b.addEventListener("click", async () => {
+        const next = new Set(card.restrictions || []);
+        if (next.has(r)) next.delete(r);
+        else {
+          if (r === NO_RESTR) next.clear();       // "none found" can't go with a restriction
+          else next.delete(NO_RESTR);
+          next.add(r);
+        }
+        card.restrictions = RESTRICTIONS.filter((x) => next.has(x));
+        await saveCard();
+        renderRestrictions();
+        renderCard();
+      });
+      box.append(b);
+    }
   }
 
   // ---------- Show marker: the number to hold up to the GoPro ----------
@@ -995,6 +1280,7 @@
         if (values.length) card.answers[c.id] = { status: "answered", value: values.join(", "), values, heard, by: "tap", at: Date.now() };
         else delete card.answers[c.id];
       }
+      if (c.id === "ends") card.endsPaved = chosen.has("Connects to another path") ? endsPaved : "";
       if (c.field && input) {
         card[c.field.key] = input.value.trim();
         if (c.field.key === "startFrom") $("start-from").value = card.startFrom;
@@ -1065,6 +1351,30 @@
       syncField();
     }
 
+    // "Connects to another path": is that path paved or unpaved?
+    let pavedBox = null, endsPaved = card.endsPaved || "";
+    if (c.id === "ends") {
+      pavedBox = el("div", "field-box");
+      pavedBox.append(el("span", "small-label", "Is that path paved?"));
+      const seg = el("div", "seg");
+      for (const v of ["Paved", "Unpaved"]) {
+        const sb = el("button", "", v);
+        sb.type = "button";
+        sb.dataset.v = v;
+        sb.setAttribute("aria-pressed", String(endsPaved === v));
+        sb.addEventListener("click", () => {
+          endsPaved = endsPaved === v ? "" : v;
+          for (const x of seg.children) x.setAttribute("aria-pressed", String(x.dataset.v === endsPaved));
+        });
+        seg.append(sb);
+      }
+      pavedBox.append(seg);
+      body.append(pavedBox);
+      const syncPaved = () => { pavedBox.hidden = !chosen.has("Connects to another path"); };
+      syncPaved();
+      body.addEventListener("click", syncPaved);
+    }
+
     if (needsSave) {
       const done = el("button", "btn-primary slim", "Save");
       done.type = "button";
@@ -1093,12 +1403,20 @@
   function applyAnswers(card, text) {
     const found = pickAnswers(text);
     let lit = 0, unclear = 0;
+    const items = []; // what was found, to show: [{ label, text, check }]
     for (const [id, a] of Object.entries(found)) {
       const old = card.answers[id];
       if (old && old.by === "tap" && old.status === "answered" && a.status === "unclear") continue; // don't undo your own pick
       card.answers[id] = { ...a, by: "voice", at: Date.now() };
-      if (a.status === "answered") lit++;
-      else unclear++;
+      const crit = CRITERIA.find((c) => c.id === id);
+      const label = crit ? crit.label : id;
+      if (a.status === "answered") {
+        lit++;
+        items.push({ label, text: a.values && a.values.length ? a.values.join(", ") : a.value });
+      } else {
+        unclear++;
+        items.push({ label, text: (a.options || []).join(" or "), check: true });
+      }
     }
     if (!card.startFrom) {
       const from = TN.summary.startFromSpeech(text);
@@ -1113,7 +1431,67 @@
       if (v) { card.startPaved = v; setPaved(v); }
     }
     card.said.push({ text, at: Date.now() });
-    return { lit, unclear };
+    return { lit, unclear, items };
+  }
+
+  // Before reading a message, keep what the card looked like, so "Delete message" can put it back.
+  function snapCard(card) {
+    return JSON.parse(JSON.stringify({ answers: card.answers, startFrom: card.startFrom || "", endsAt: card.endsAt || "", startPaved: card.startPaved || "", said: card.said }));
+  }
+
+  // The window shown after a message is read: how many answers it found (or none), what was heard,
+  // and a way to delete the message right there.
+  function showResult({ lit, unclear, items = [], text, before, recs = [] }) {
+    const card = state.current;
+    const found = lit + unclear;
+    const body = el("div");
+    if (!text) body.append(el("p", "confirm-text", "Couldn't hear any words in your recordings."));
+    else if (!found) body.append(el("p", "confirm-text", "Try naming the criteria, or say it another way."));
+    else {
+      const list = el("ul", "found-list");
+      for (const it of items) {
+        const li = el("li");
+        li.append(el("strong", "", it.label), document.createTextNode(it.check ? ` — to check: ${it.text}` : ` — ${it.text}`));
+        list.append(li);
+      }
+      body.append(list);
+    }
+    if (text) body.append(el("p", "heard-text", `"${text}"`));
+    if (text && found) body.append(el("p", "summary-gaps", "Deleting the message keeps the answers it found."));
+    const row = el("div", "confirm-row");
+    const del = el("button", "btn-warn", "Delete message");
+    const ok = el("button", "btn-primary slim", "OK");
+    del.type = ok.type = "button";
+    ok.addEventListener("click", () => { closeSheet(); askForPath(); });
+    del.addEventListener("click", async () => {
+      card.said = before.said; // the message goes; the answers it found stay
+      for (const r of recs) await db.del("recordings", r.id);
+      await saveCard();
+      closeSheet();
+      renderCard();
+      await loadWaiting();
+      await renderRecordings();
+      toast("Message deleted");
+      askForPath();
+    });
+    row.append(del, ok);
+    body.append(row);
+    openSheet(!text ? "Nothing heard" : found ? `${plural(lit, "answer", "answers")} found${unclear ? `, ${unclear} to check` : ""}` : "No answers found", body, { noClose: true });
+  }
+
+  // Said "connects to another path" but not which one: open that question so the name can be typed.
+  function askForPath() {
+    const card = state.current;
+    const a = card && card.answers && card.answers.ends;
+    const has = a && a.status === "answered" && (a.values || [a.value]).includes("Connects to another path");
+    if (!has || String(card.endsAt || "").trim()) return;
+    const c = CRITERIA.find((x) => x.id === "ends");
+    if (!c) return;
+    setTimeout(() => {
+      openCriterion(c);
+      const f = $("crit-field");
+      if (f) f.focus({ preventScroll: true });
+    }, 250);
   }
 
   function processText(text) {
@@ -1123,7 +1501,7 @@
       return;
     }
     const body = el("div", "processing");
-    body.append(el("div", "spinner"), el("p", "", "Reading what you said and finding the answers…"));
+    body.append(loader(), el("p", "", "Reading what you said and finding the answers…"));
     const cancel = el("button", "btn-ghost", "Cancel");
     cancel.type = "button";
     body.append(cancel);
@@ -1134,18 +1512,17 @@
       closeSheet();
       toast("Cancelled. Nothing changed. Add more and try again.");
     });
-    openSheet("Processing", body, { noClose: true });
+    openWheel(body);
     // The real speech model will take a while; the answer-finding itself is quick.
     setTimeout(async () => {
       if (job.cancelled || processing !== job) return;
+      const before = snapCard(card);
       const r = applyAnswers(card, text);
       await saveCard();
       closeSheet();
       renderCard();
       $("said").value = "";
-      toast(r.lit || r.unclear
-        ? `${plural(r.lit, "answer", "answers")} found${r.unclear ? `, ${r.unclear} to check` : ""}`
-        : "No answers found in that. Try naming the criteria.");
+      showResult({ ...r, text, before });
     }, 900);
   }
 
@@ -1205,10 +1582,9 @@
           return resolve();
         }
         const buffer = await blob.arrayBuffer();
-        const id = await db.put("recordings", { area: state.current.area, card: state.current.number, buffer, mime: r.mime, seconds, at: Date.now(), status: "waiting" });
-        await renderRecordings();
+        await db.put("recordings", { area: state.current.area, card: state.current.number, buffer, mime: r.mime, seconds, at: Date.now(), status: "waiting" });
+        await renderRecordings();   // saved; record more, then tap "Translate to text"
         resolve();
-        processRecording(id); // straight into speech-to-text (saved first, so nothing is lost)
       };
       r.recorder.stop();
     });
@@ -1257,25 +1633,21 @@
       });
       row.append(play, text, del);
       wrap.append(row);
-      if (r.status === "processed" && r.transcript) {
-        wrap.append(el("p", "rec-said", `"${r.transcript}"`));
-      } else {
-        const actions = el("div", "rec-actions");
-        const go = el("button", "btn-ghost", "Turn into text");
-        go.type = "button";
-        go.addEventListener("click", () => processRecording(r.id));
-        actions.append(go);
-        wrap.append(actions);
-      }
+      if (r.status === "processed" && r.transcript) wrap.append(el("p", "rec-said", `"${r.transcript}"`));
       box.append(wrap);
     });
+    const waiting = list.filter((r) => r.status !== "processed").length;
+    const tb = $("translate-btn");
+    tb.hidden = !waiting;
+    tb.textContent = waiting > 1 ? `Translate to text (${waiting} messages)` : "Translate to text";
   }
 
-  /** Speech-to-text for one saved recording, then light up the answers. Cancel any time. */
-  async function processRecording(id) {
-    const r = await db.get("recordings", id);
-    if (!r) return;
+  /** Speech-to-text for every saved message on this trail, back to back, then light up the answers once. Cancel any time. */
+  async function processRecordings() {
+    if (processing) return;
     const card = state.current;
+    const list = (await db.byCard(card.area, card.number)).filter((r) => r.status !== "processed").sort((a, b) => a.at - b.at);
+    if (!list.length) { toast("Record a message first."); return; }
     const body = el("div", "processing");
     const label = el("p", "", "Getting ready…");
     const bar = el("div", "progress");
@@ -1285,50 +1657,61 @@
     const timer = el("p", "", "0:00");
     const cancel = el("button", "btn-ghost", "Cancel");
     cancel.type = "button";
-    body.append(el("div", "spinner"), label, bar, timer, cancel);
+    body.append(loader(), label, bar, timer, cancel);
     const started = Date.now();
     const tick = setInterval(() => (timer.textContent = fmtTime((Date.now() - started) / 1000)), 500);
     let cancelled = false;
+    const job = { cancelled: false };
+    processing = job;
     cancel.addEventListener("click", () => {
       cancelled = true;
       stt.cancel();
     });
-    openSheet("Turning your words into text", body, { noClose: true });
+    openWheel(body);
+    const part = (i) => (list.length > 1 ? `Message ${i + 1} of ${list.length}: ` : "");
     try {
-      const text = await stt.transcribe(r.buffer, r.mime, (p) => {
-        if (p.phase === "download") {
-          bar.hidden = false;
-          const pct = p.total ? Math.round((p.loaded / p.total) * 100) : 0;
-          fill.style.width = `${pct}%`;
-          label.textContent = `Downloading the speech model (once): ${pct}%`;
-        } else if (p.phase === "decode") {
-          label.textContent = "Reading your recording…";
-        } else if (p.phase === "listen") {
-          bar.hidden = true;
-          label.textContent = "Listening to what you said… this can take a few minutes.";
-        }
-      });
+      const texts = [];
+      for (let i = 0; i < list.length; i++) {
+        const r = list[i];
+        const text = await stt.transcribe(r.buffer, r.mime, (p) => {
+          if (p.phase === "download") {
+            bar.hidden = false;
+            const pct = p.total ? Math.round((p.loaded / p.total) * 100) : 0;
+            fill.style.width = `${pct}%`;
+            label.textContent = `Downloading the speech model (once): ${pct}%`;
+          } else if (p.phase === "decode") {
+            bar.hidden = true;
+            label.textContent = `${part(i)}Reading your recording…`;
+          } else if (p.phase === "listen") {
+            bar.hidden = true;
+            label.textContent = `${part(i)}Listening to what you said… this can take a few minutes.`;
+          }
+        });
+        if (cancelled) throw Object.assign(new Error("Stopped"), { code: "CANCELLED" });
+        texts.push(text || "");
+      }
       clearInterval(tick);
-      if (cancelled) return;
-      r.status = "processed";
-      r.transcript = text;
-      await db.put("recordings", r);
+      for (let i = 0; i < list.length; i++) {
+        list[i].status = "processed";
+        list[i].transcript = texts[i];
+        await db.put("recordings", list[i]);
+      }
+      const text = texts.filter(Boolean).join(" ").trim();
+      const before = snapCard(card);
       const found = text ? applyAnswers(card, text) : { lit: 0, unclear: 0 };
       await saveCard();
+      processing = null;
       closeSheet();
       renderCard();
       await renderRecordings();
       renderModelStatus();
-      toast(!text
-        ? "Couldn't hear any words in that recording."
-        : found.lit || found.unclear
-          ? `${plural(found.lit, "answer", "answers")} found${found.unclear ? `, ${found.unclear} to check` : ""}`
-          : "No answers found in that. Try naming the criteria.");
+      showResult({ ...found, text, before, recs: list });
     } catch (e) {
       clearInterval(tick);
+      processing = null;
       closeSheet();
       await renderRecordings();
-      if (e.code === "CANCELLED") toast("Stopped. Your recording is saved. Add more, then tap Turn into text.");
+      if (e.code === "CANCELLED") toast("Stopped. Your messages are saved. Tap Translate to text when you're ready.");
       else toast(e.message);
     }
   }
@@ -1361,7 +1744,7 @@
     for (const para of paras) {
       if (!para.length) continue;
       const pEl = el("p");
-      for (const piece of para) pEl.append(piece.gap ? el("mark", "", piece.gap) : document.createTextNode(piece.text));
+      for (const piece of para) pEl.append(piece.gap ? el("mark", "", piece.gap) : piece.curator ? el("strong", "curator-note", piece.text) : document.createTextNode(piece.text));
       box.append(pEl);
     }
     const missing = TN.summary.gaps(paras);
@@ -1377,7 +1760,6 @@
     $("no-pois").checked = !!card.noPois;
     $("no-pois").disabled = card.pois.length > 0;
     const pr = progress(card, state.area);
-    setBar("card-progress", pr.answered / pr.total);
     const box = $("poi-list");
     box.textContent = "";
     if (!card.pois.length) {
@@ -1466,7 +1848,16 @@
     const first = body.querySelector("button, textarea, input");
     if (first && !opts.noClose) first.focus({ preventScroll: true });
   }
+  // The wheel on top of the page (waiting screens). body = the .processing block with the wheel, text, Cancel.
+  function openWheel(body) {
+    $("wheel-box").textContent = "";
+    $("wheel-box").append(body);
+    $("wheel-overlay").hidden = false;
+  }
+  function closeWheel() { $("wheel-overlay").hidden = true; }
+
   function closeSheet() {
+    closeWheel();
     $("sheet-wrap").hidden = true;
     processing = null;
     if (sheetReturn && sheetReturn.focus) sheetReturn.focus({ preventScroll: true });
@@ -1529,7 +1920,7 @@
   function renderModelStatus() {
     const ready = stt.isReady();
     const note = $("model-status");
-    note.textContent = ready ? "Ready. Works offline on this phone." : "Not downloaded yet. About 80 MB, once, with signal. After that it works offline.";
+    note.textContent = ready ? (state.bundled ? "Installed with the app. Works offline." : "Ready. Works offline on this phone.") : "Not downloaded yet. About 80 MB, once, with signal. After that it works offline.";
     note.classList.toggle("ready", ready);
     $("model-btn").hidden = ready;
   }
@@ -1589,7 +1980,7 @@
 
     $("new-area").addEventListener("click", () => openStart("new"));
     $("add-trails").addEventListener("click", () => openStart("add"));
-    $("area-back").addEventListener("click", async () => { await renderAreas(); show("areas"); });
+    $("area-back").addEventListener("click", async () => { if (state.saveDesc) await state.saveDesc(); await renderAreas(); show("areas"); });
     $("start-back").addEventListener("click", async () => {
       if (state.back === "area") show("area");
       else { await renderAreas(); show("areas"); }
@@ -1631,6 +2022,7 @@
     $("import-btn").addEventListener("click", importSheet);
     $("card-back").addEventListener("click", () => { renderArea(); show("area"); });
     $("mic-btn").addEventListener("click", toggleMic);
+    $("translate-btn").addEventListener("click", processRecordings);
     $("marker-btn").addEventListener("click", showMarker);
     let fromTimer = null;
     $("start-from").addEventListener("input", () => {
@@ -1646,12 +2038,22 @@
     $("poi-add").addEventListener("click", addPoi);
     $("sheet-close").addEventListener("click", closeSheet);
     $("sheet-wrap").addEventListener("click", (e) => { if (e.target === $("sheet-wrap") && !$("sheet-close").hidden) closeSheet(); });
-    let areaTimer = null;
-    $("area-desc").addEventListener("input", () => {
-      clearTimeout(areaTimer);
-      state.area.desc = $("area-desc").value;
-      areaTimer = setTimeout(saveAreas, 400);
-    });
+    const descDirty = () => ($("area-desc").value.trim() !== String((state.area && state.area.desc) || "").trim());
+    const descButton = () => {
+      const dirty = descDirty();
+      $("area-desc-save").disabled = !dirty;
+      $("area-desc-save").textContent = dirty ? "Save description" : "Saved";
+    };
+    state.saveDesc = async () => {
+      if (!state.area || !descDirty()) return;
+      state.area.desc = $("area-desc").value.trim();
+      await saveAreas();
+      descButton();
+      toast("Area description saved");
+    };
+    $("area-desc").addEventListener("input", descButton);
+    $("area-desc-save").addEventListener("click", state.saveDesc);
+    state.descButton = descButton;
     for (const b of $("start-paved").children) {
       b.addEventListener("click", async () => {
         const c = state.current;
@@ -1681,6 +2083,34 @@
       await saveCard();
       renderPois(); renderCard();
     });
+    $("curator-on").addEventListener("change", async () => {
+      const c = state.current;
+      c.curatorOn = $("curator-on").checked;
+      $("curator-text").hidden = !c.curatorOn;
+      if (c.curatorOn) $("curator-text").focus();
+      await saveCard();
+      renderSummary();
+    });
+    let curTimer = null;
+    $("curator-text").addEventListener("input", () => {
+      clearTimeout(curTimer);
+      state.current.curatorNote = $("curator-text").value;
+      renderSummary();
+      curTimer = setTimeout(saveCard, 400);
+    });
+    const ltChanged = () => {
+      const c = state.current;
+      c.milesText = $("lt-miles").value;
+      c.timeText = $("lt-time").value;
+      c.miles = TN.parse.parseMiles(c.milesText);
+      c.hours = TN.parse.parseHours(c.timeText);
+      showLengthTime(c);
+      clearTimeout(ltTimer);
+      ltTimer = setTimeout(async () => { await saveCard(); renderCard(); }, 500);
+    };
+    let ltTimer = null;
+    $("lt-miles").addEventListener("input", ltChanged);
+    $("lt-time").addEventListener("input", ltChanged);
     $("complete-btn").addEventListener("click", completeTrail);
     $("abandon-btn").addEventListener("click", abandonTrail);
     $("reopen-btn").addEventListener("click", async () => {
@@ -1689,10 +2119,33 @@
       renderCard();
       toast("Trail reopened");
     });
-    window.addEventListener("online", renderNet);
-    window.addEventListener("offline", renderNet);
+    window.addEventListener("online", () => { renderNet(); renderSync().then(() => state.syncWaiting && runSync(true)); });
+    window.addEventListener("offline", () => { renderNet(); renderSync(); });
+    // Any button that says "Checking…", "Reading…", "Downloading…" gets the little topo loader in front.
+    let tweaking = false;
+    const dress = (btn) => {
+      const busy = /…$/.test(btn.textContent.trim());
+      const has = btn.querySelector(":scope > .spinner");
+      if (busy && !has) btn.prepend(loader(true));
+      else if (!busy && has) has.remove();
+    };
+    new MutationObserver((muts) => {
+      if (tweaking) return;
+      tweaking = true;
+      for (const m of muts) {
+        const b = (m.target.nodeType === 1 ? m.target : m.target.parentElement);
+        const btn = b && b.closest && b.closest("button");
+        if (btn) dress(btn);
+      }
+      tweaking = false;
+    }).observe(document.body, { childList: true, characterData: true, subtree: true });
+    $("sync-btn").addEventListener("click", () => runSync(false));
+    $("drawer-switch").addEventListener("click", () => { drive.signOut(); drive.signIn(true); });   // Google asks which account
+    $("drawer-signout").addEventListener("click", async () => { drive.signOut(); setDrawer(false); await renderSync(); toast("Signed out of Google."); });
+    const back = drive.handleReturn();
     renderNet();
     renderModelStatus();
+    if (stt.checkBundled) stt.checkBundled().then((b) => { if (b) { state.bundled = true; renderModelStatus(); } });
 
     // Ask the phone to keep our data (installed apps usually get this).
     if (navigator.storage && navigator.storage.persist) {
@@ -1706,9 +2159,16 @@
     state.sheetCounts = (await db.get("kv", "sheetCounts")) || {};
     state.sheetError = "";
     await migrateOldList();
+    await restoreCompleted();
     await renderAreas();
     show("areas");
     refreshSheetAreas();   // check the sheet for areas each time the app opens
+    if (back === "signed-in") { toast("Signed in to Google."); drive.fetchAccount().then(() => renderSync()).then(() => runSync(false)); }
+    else if (back.startsWith("error:")) toast(`Google sign-in didn't work (${back.slice(6)}).`);
+    else if (drive.tokenValid() && navigator.onLine) {   // already signed in: send what's waiting
+      if (!drive.account()) drive.fetchAccount().then(() => renderSync());
+      runSync(true);
+    }
 
     if ("serviceWorker" in navigator) {
       // When an update finishes installing, reload once so the new version shows right away.

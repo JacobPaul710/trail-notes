@@ -8,11 +8,13 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Trail Notes">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net blob:; worker-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://docs.google.com">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net blob:; worker-src 'self' blob:; connect-src 'self' https://www.googleapis.com https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://docs.google.com">
 <title>Trail Notes</title>
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-<link rel="icon" href="icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="icon" type="image/png" sizes="64x64" href="icons/favicon-64.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="stylesheet" href="topo-mask.css">
 <link rel="stylesheet" href="styles.css">
 <script src="js/theme-early.js"></script>
@@ -20,10 +22,11 @@
 <body>
 
 <!-- side menu: swipe in from the left edge, or tap the menu button -->
+<div id="wheel-overlay" class="wheel-overlay" role="status" aria-live="polite" hidden><div class="wheel-box" id="wheel-box"></div></div>
 <div id="scrim" class="scrim" hidden></div>
 <nav id="drawer" class="drawer" aria-label="Menu" aria-hidden="true">
   <div class="drawer-head">
-    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="10" ry="7"/><ellipse cx="12" cy="12" rx="6.5" ry="4.2"/><ellipse cx="12" cy="12" rx="3" ry="1.8"/></svg>
+    <img class="brand-icon" src="img/brand.png" alt="">
     <span class="brand-name">Trail Notes</span>
   </div>
   <div class="drawer-section">
@@ -38,6 +41,13 @@
     <span class="drawer-label">Trail sheet</span>
     <span id="drawer-sheet" class="drawer-note">Not linked yet. Link it on the Home screen.</span>
     <button type="button" id="drawer-change-link" class="drawer-btn" hidden>Use a different sheet</button>
+  </div>
+  <div class="drawer-section">
+    <span class="drawer-label">Google Drive</span>
+    <span id="drawer-google" class="drawer-note">Not signed in.</span>
+    <button type="button" id="drawer-switch" class="drawer-btn" hidden>Switch Google account</button>
+    <button type="button" id="drawer-signout" class="drawer-btn" hidden>Sign out of Google</button>
+    <span id="drawer-redirect" class="drawer-note"></span>
   </div>
   <div class="drawer-section">
     <span class="drawer-label">Speech model</span>
@@ -57,22 +67,20 @@
 <section id="view-areas" class="view" hidden>
   <header class="top">
     <button type="button" class="icon-btn menu-btn" aria-label="Open menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <img class="brand-icon" src="img/brand.png" alt="">
     <span class="brand-name">Trail Notes</span>
     <span class="pill net-pill">Offline</span>
-    <div class="progress-bar" id="home-progress" role="progressbar" aria-label="Trails finished" aria-valuemin="0" aria-valuemax="100"><span></span></div>
   </header>
   <div class="page">
     <h2 class="home-head">Locations</h2>
     <div id="area-list" class="card-list"></div>
     <p id="no-areas" class="lead" hidden>No locations on this phone yet. Tap one from your sheet below.</p>
-    <button type="button" id="new-area" class="btn-ghost wide">Paste a trail list (offline option)</button>
-
     <section id="sheet-panel" class="panel">
       <div id="sheet-unlinked">
         <div class="panel-row">
           <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/></svg>
           <div class="panel-text"><strong>Link your trail sheet</strong><span>Once. Then its areas show up here to add.</span></div>
-          <span class="badge needs-signal"><span class="dot"></span>Needs signal</span>
+          <span class="link-dot idle" role="img" aria-label="Not linked yet" title="Not linked yet"></span>
         </div>
         <input id="home-link" type="text" inputmode="url" autocomplete="off" aria-label="Trail sheet link" placeholder="https://docs.google.com/spreadsheets/d/…">
         <span id="home-link-status" class="paste-status" aria-live="polite"></span>
@@ -92,18 +100,22 @@
 
     <section class="sync-bar">
       <svg class="sync-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a4.5 4.5 0 0 1-.5-9A6 6 0 0 1 18 9.5a4 4 0 0 1-1 8.5H7z"/><path d="M12 11v5"/><path d="M9.5 13.5 12 16l2.5-2.5"/></svg>
-      <div class="sync-text"><strong id="sync-title">Not synced yet</strong><span id="sync-sub">Sync comes in a later update</span></div>
-      <button type="button" id="sync-btn" class="btn-ghost" disabled>Sync</button>
+      <span id="sync-dot" class="link-dot" aria-hidden="true"></span>
+      <div class="sync-text"><strong id="sync-title">Not synced yet</strong><span id="sync-sub">Sign in with Google to back up your trails</span><a id="sync-view" class="sync-view" href="#" target="_blank" rel="noopener" hidden>View in Drive</a></div>
+      <button type="button" id="sync-btn" class="btn-ghost">Sign in to sync</button>
     </section>
+
+    <button type="button" id="new-area" class="btn-ghost wide">Paste a trail list (offline option)</button>
   </div>
 </section>
 
 <!-- ========== One area: its trails ========== -->
 <section id="view-area" class="view" hidden>
   <header class="top">
-    <button type="button" id="area-back" class="icon-btn" aria-label="Back to areas"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button type="button" id="area-back" class="back-btn" aria-label="Back to home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Home</span></button>
     <div class="card-title"><strong id="area-name"></strong><span id="area-sub"></span></div>
     <button type="button" id="area-delete" class="icon-btn" aria-label="Delete this area"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+    <div class="progress-bar" id="area-progress" role="progressbar" aria-label="Trails finished in this area" aria-valuemin="0" aria-valuemax="100"><span></span></div>
   </header>
   <div class="page">
     <div class="section-head"><span>Trails</span><span>in list order</span></div>
@@ -114,6 +126,7 @@
     <section class="panel area-desc-panel">
       <label for="area-desc" class="small-label">Area description (used in every trail's summary: "…through the ___")</label>
       <textarea id="area-desc" rows="3" placeholder="e.g. flourishing forest (the keyboard's mic works here)"></textarea>
+      <button type="button" id="area-desc-save" class="btn-primary slim" disabled>Saved</button>
     </section>
   </div>
 </section>
@@ -122,6 +135,7 @@
 <section id="view-start" class="view" hidden>
   <header class="top">
     <button type="button" id="start-back" class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <img class="brand-icon" src="img/brand.png" alt="">
     <span class="brand-name">Trail Notes</span>
   </header>
   <div class="page">
@@ -150,7 +164,7 @@
       <div class="panel-row">
         <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/></svg>
         <div class="panel-text"><strong>Import from the sheet</strong><span>Shared as "Anyone with the link can view"</span></div>
-        <span class="badge needs-signal"><span class="dot"></span>Needs signal</span>
+        <span class="link-dot idle" role="img" aria-label="Not linked yet" title="Not linked yet"></span>
       </div>
       <div id="link-row">
         <label for="sheet-link" class="small-label">Sheet link (once: it's remembered)</label>
@@ -177,11 +191,10 @@
 <!-- ========== One trail card ========== -->
 <section id="view-card" class="view" hidden>
   <header class="top card-top">
-    <button type="button" id="card-back" class="icon-btn" aria-label="Back to trails"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <button type="button" id="card-back" class="back-btn" aria-label="Back to trails"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg><span>Trails</span></button>
     <span id="card-num" class="num-badge"></span>
     <div class="card-title"><strong id="card-name"></strong><span id="card-date"></span></div>
     <div id="card-ring" class="ring-wrap"></div>
-    <div class="progress-bar" id="card-progress" role="progressbar" aria-label="This trail's progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
   </header>
   <div class="page card-page">
 
@@ -213,8 +226,9 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
         <span id="mic-label">Tap to talk</span>
       </button>
-      <p id="mic-hint" class="mic-hint">Talk through the whole trail. Use the list above so nothing gets missed.</p>
+      <p id="mic-hint" class="mic-hint">Talk through the trail. Record as many messages as you like, then tap Translate to text.</p>
       <div id="recordings" class="recordings"></div>
+      <button type="button" id="translate-btn" class="btn-primary" hidden>Translate to text</button>
     </section>
 
     <section class="panel">
@@ -232,9 +246,28 @@
     </section>
 
     <section>
+      <div class="section-head"><span>Seasonal or legal restrictions</span><span>pick all that apply</span></div>
+      <div id="restr" class="bubbles" role="group" aria-label="Seasonal or legal restrictions"></div>
+    </section>
+
+    <section class="panel curator-panel">
+      <label class="check-row"><input type="checkbox" id="curator-on"> <span>Note for the data curating team</span></label>
+      <textarea id="curator-text" rows="2" hidden placeholder="e.g. GPX files need stitching to be added to G drive (the keyboard's mic works here)"></textarea>
+    </section>
+
+    <section>
       <div class="section-head"><span>Trail summary</span></div>
       <div id="summary" class="panel summary-box" aria-live="polite"></div>
       <span id="summary-gaps" class="summary-gaps"></span>
+    </section>
+
+    <section class="curator-panel">
+      <div class="section-head"><span>Length and time</span></div>
+      <label for="lt-miles" class="small-label">Length (miles)</label>
+      <input id="lt-miles" type="text" inputmode="decimal" autocomplete="off" placeholder="e.g. 2.4 (the keyboard's mic works here)">
+      <label for="lt-time" class="small-label">Time it took</label>
+      <input id="lt-time" type="text" autocomplete="off" placeholder="e.g. 1 hour 30 minutes, or 1:30">
+      <span id="lt-read" class="summary-gaps"></span>
     </section>
 
     <p id="complete-note" class="summary-gaps"></p>
@@ -267,6 +300,8 @@
 <script src="js/stt.js"></script>
 <script src="js/marker.js"></script>
 <script src="js/summary.js"></script>
+<script src="js/config.js"></script>
+<script src="js/drive.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

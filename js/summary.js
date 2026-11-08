@@ -126,8 +126,12 @@
       ends.forEach((e, i) => {
         if (i) t(into, i === ends.length - 1 ? " and " : ", ");
         if (e === "Connects to another path") {
-          t(into, "at its junction with ");
-          card.endsAt ? t(into, card.endsAt) : g(into, "path it connects to");
+          if (card.endsAt && card.endsPaved) t(into, `at the ${lower(card.endsPaved)} ${card.endsAt} junction`);
+          else {
+            t(into, "at its junction with ");
+            card.endsAt ? t(into, card.endsAt) : g(into, "path it connects to");
+            if (card.endsAt && !card.endsPaved) t(into, " "), g(into, "paved or unpaved");
+          }
         } else t(into, ENDING[e] || `at ${lower(e)}`);
       });
     };
@@ -175,6 +179,12 @@
     } else {
       g(p, "obstacles");
       t(p, ` earn this trail a ${lower(level)} rating.`);
+    }
+    // A note for the data curating team goes last: "*GPX files need stitching...", bold and blue on screen.
+    const note = String(card.curatorNote || "").trim();
+    if (card.curatorOn && note) {
+      const last = [...paras].reverse().find((x) => x.length);
+      (last || P()).push({ text: `*${note.replace(/^\*+\s*/, "")}`, curator: true });
     }
     return paras;
   }

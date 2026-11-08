@@ -1,0 +1,10 @@
+{
+  "name": "trail-notes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Trail Notes: offline field notes for trail mapping (Project 3).",
+  "scripts": {
+    "start": "node serve.js",
+    "test": "node --test"
+  }
+}

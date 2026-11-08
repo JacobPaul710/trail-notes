@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en" data-theme="green">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d140f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Trail Notes">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self'; script-src 'self' 'wasm-unsafe-eval' https://cdn.jsdelivr.net blob:; worker-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net https://huggingface.co https://*.huggingface.co https://*.hf.co https://docs.google.com">
+<title>Trail Notes</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="topo-mask.css">
+<link rel="stylesheet" href="styles.css">
+<script src="js/theme-early.js"></script>
+</head>
+<body>
+
+<!-- side menu: swipe in from the left edge, or tap the menu button -->
+<div id="scrim" class="scrim" hidden></div>
+<nav id="drawer" class="drawer" aria-label="Menu" aria-hidden="true">
+  <div class="drawer-head">
+    <svg class="brand-mark" viewBox="0 0 24 24" aria-hidden="true"><ellipse cx="12" cy="12" rx="10" ry="7"/><ellipse cx="12" cy="12" rx="6.5" ry="4.2"/><ellipse cx="12" cy="12" rx="3" ry="1.8"/></svg>
+    <span class="brand-name">Trail Notes</span>
+  </div>
+  <div class="drawer-section">
+    <span class="drawer-label">Theme</span>
+    <div class="theme-list" role="radiogroup" aria-label="Theme">
+      <button type="button" class="theme-opt" role="radio" data-theme="green"><span class="swatch sw-green"></span>Forest Green</button>
+      <button type="button" class="theme-opt" role="radio" data-theme="mono"><span class="swatch sw-mono"></span>Black &amp; White</button>
+      <button type="button" class="theme-opt" role="radio" data-theme="dusk"><span class="swatch sw-dusk"></span>Desert Dusk</button>
+    </div>
+  </div>
+  <div class="drawer-section">
+    <span class="drawer-label">Trail sheet</span>
+    <span id="drawer-sheet" class="drawer-note">Not linked yet. Link it on the Home screen.</span>
+    <button type="button" id="drawer-change-link" class="drawer-btn" hidden>Use a different sheet</button>
+  </div>
+  <div class="drawer-section">
+    <span class="drawer-label">Speech model</span>
+    <span id="model-status" class="drawer-note">Not downloaded yet. About 80 MB, once, with signal. After that it works offline.</span>
+    <button type="button" id="model-btn" class="drawer-btn">Download now</button>
+  </div>
+  <div class="drawer-section"><span class="drawer-note"><a href="privacy.html">Privacy policy</a> · <a href="terms.html">Terms of service</a></span></div>
+  <div class="drawer-foot">
+    <span id="storage-note">Saved on this device</span>
+    <span>Version 0.7</span>
+  </div>
+</nav>
+
+<div class="app">
+
+<!-- ========== Home: your areas ========== -->
+<section id="view-areas" class="view" hidden>
+  <header class="top">
+    <button type="button" class="icon-btn menu-btn" aria-label="Open menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
+    <span class="brand-name">Trail Notes</span>
+    <span class="pill net-pill">Offline</span>
+    <div class="progress-bar" id="home-progress" role="progressbar" aria-label="Trails finished" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+  </header>
+  <div class="page">
+    <h2 class="home-head">Locations</h2>
+    <div id="area-list" class="card-list"></div>
+    <p id="no-areas" class="lead" hidden>No locations on this phone yet. Tap one from your sheet below.</p>
+    <button type="button" id="new-area" class="btn-ghost wide">Paste a trail list (offline option)</button>
+
+    <section id="sheet-panel" class="panel">
+      <div id="sheet-unlinked">
+        <div class="panel-row">
+          <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/></svg>
+          <div class="panel-text"><strong>Link your trail sheet</strong><span>Once. Then its areas show up here to add.</span></div>
+          <span class="badge needs-signal"><span class="dot"></span>Needs signal</span>
+        </div>
+        <input id="home-link" type="text" inputmode="url" autocomplete="off" aria-label="Trail sheet link" placeholder="https://docs.google.com/spreadsheets/d/…">
+        <span id="home-link-status" class="paste-status" aria-live="polite"></span>
+        <button type="button" id="home-link-btn" class="btn-primary slim">Link the sheet</button>
+      </div>
+      <div id="sheet-linked" hidden>
+        <div class="sheet-head">
+          <span id="sheet-dot" class="link-dot ok" aria-hidden="true"></span>
+          <div class="panel-text"><strong id="sheet-state">Trail sheet linked</strong><span id="sheet-checked"></span></div>
+          <button type="button" id="sheet-refresh" class="btn-ghost slim-btn">Refresh</button>
+        </div>
+        <div class="section-head"><span>On your sheet</span><span id="sheet-areas-note"></span></div>
+        <div id="sheet-areas" class="area-choices"></div>
+        <span id="sheet-areas-status" class="paste-status" aria-live="polite"></span>
+      </div>
+    </section>
+
+    <section class="sync-bar">
+      <svg class="sync-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a4.5 4.5 0 0 1-.5-9A6 6 0 0 1 18 9.5a4 4 0 0 1-1 8.5H7z"/><path d="M12 11v5"/><path d="M9.5 13.5 12 16l2.5-2.5"/></svg>
+      <div class="sync-text"><strong id="sync-title">Not synced yet</strong><span id="sync-sub">Sync comes in a later update</span></div>
+      <button type="button" id="sync-btn" class="btn-ghost" disabled>Sync</button>
+    </section>
+  </div>
+</section>
+
+<!-- ========== One area: its trails ========== -->
+<section id="view-area" class="view" hidden>
+  <header class="top">
+    <button type="button" id="area-back" class="icon-btn" aria-label="Back to areas"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <div class="card-title"><strong id="area-name"></strong><span id="area-sub"></span></div>
+    <button type="button" id="area-delete" class="icon-btn" aria-label="Delete this area"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button>
+  </header>
+  <div class="page">
+    <div class="section-head"><span>Trails</span><span>in list order</span></div>
+    <div id="card-list" class="card-list"></div>
+    <button type="button" id="check-sheet" class="btn-ghost wide" hidden>Check the sheet for new trails</button>
+    <span id="check-status" class="paste-status" aria-live="polite"></span>
+    <button type="button" id="add-trails" class="btn-ghost wide">+ Add trails</button>
+    <section class="panel area-desc-panel">
+      <label for="area-desc" class="small-label">Area description (used in every trail's summary: "…through the ___")</label>
+      <textarea id="area-desc" rows="3" placeholder="e.g. flourishing forest (the keyboard's mic works here)"></textarea>
+    </section>
+  </div>
+</section>
+
+<!-- ========== Start an area / add trails: paste or import ========== -->
+<section id="view-start" class="view" hidden>
+  <header class="top">
+    <button type="button" id="start-back" class="icon-btn" aria-label="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <span class="brand-name">Trail Notes</span>
+  </header>
+  <div class="page">
+    <h1 id="start-title">Paste a trail list</h1>
+    <p id="start-lead" class="lead">Name the area, then paste or import its trail list. Each trail gets its own numbered card.</p>
+
+    <section id="area-name-panel" class="panel">
+      <label for="area-input" class="small-label">Area name</label>
+      <input id="area-input" type="text" autocomplete="off" placeholder="e.g. CA - 1C - Tahoe">
+    </section>
+
+    <section class="panel">
+      <div class="panel-row">
+        <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/></svg>
+        <div class="panel-text"><strong>Paste the trail list</strong><span>Copy the rows in your Google Sheet first</span></div>
+        <span class="badge offline-ok"><span class="dot"></span>Works offline</span>
+      </div>
+      <button type="button" id="paste-btn" class="btn-ghost wide">Paste from clipboard</button>
+      <details id="paste-more" class="more">
+        <summary>Or type or edit the list</summary>
+        <textarea id="paste" rows="7" aria-label="Trail list" placeholder="11	Barker Pass	10/8/2026&#10;12	Rubicon	10/8/2026"></textarea>
+      </details>
+    </section>
+
+    <section id="import-panel" class="panel">
+      <div class="panel-row">
+        <svg class="panel-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 9h16M4 15h16M10 3v18"/></svg>
+        <div class="panel-text"><strong>Import from the sheet</strong><span>Shared as "Anyone with the link can view"</span></div>
+        <span class="badge needs-signal"><span class="dot"></span>Needs signal</span>
+      </div>
+      <div id="link-row">
+        <label for="sheet-link" class="small-label">Sheet link (once: it's remembered)</label>
+        <input id="sheet-link" type="text" inputmode="url" autocomplete="off" placeholder="https://docs.google.com/spreadsheets/d/…">
+      </div>
+      <div id="area-choices" class="area-choices" hidden></div>
+      <span id="import-status" class="paste-status" aria-live="polite"></span>
+      <button type="button" id="import-btn" class="btn-ghost wide">Read the sheet</button>
+      <button type="button" id="change-link" class="link-btn" hidden>Use a different sheet</button>
+    </section>
+
+    <section id="preview" class="panel preview" hidden aria-live="polite">
+      <div class="panel-row">
+        <svg class="panel-icon ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>
+        <div class="panel-text"><strong id="preview-title"></strong><span id="preview-sub"></span></div>
+      </div>
+      <ol id="preview-list" class="preview-list"></ol>
+    </section>
+
+    <button type="button" id="build-btn" class="btn-primary" disabled>Create area</button>
+  </div>
+</section>
+
+<!-- ========== One trail card ========== -->
+<section id="view-card" class="view" hidden>
+  <header class="top card-top">
+    <button type="button" id="card-back" class="icon-btn" aria-label="Back to trails"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button>
+    <span id="card-num" class="num-badge"></span>
+    <div class="card-title"><strong id="card-name"></strong><span id="card-date"></span></div>
+    <div id="card-ring" class="ring-wrap"></div>
+    <div class="progress-bar" id="card-progress" role="progressbar" aria-label="This trail's progress" aria-valuemin="0" aria-valuemax="100"><span></span></div>
+  </header>
+  <div class="page card-page">
+
+    <section class="marker-row">
+      <button type="button" id="marker-btn" class="btn-ghost wide marker-btn"><span class="mk-sq" aria-hidden="true"></span><span id="marker-label">Show marker</span></button>
+      <span id="marker-note" class="marker-note">Hold it up to the GoPro at the trailhead and take a photo. Tap the screen to close.</span>
+    </section>
+
+    <section class="panel starts-panel">
+      <label for="start-from" class="small-label">Starts from (road or trail name)</label>
+      <div class="starts-row">
+        <input id="start-from" type="text" autocomplete="off" placeholder="e.g. Forest Road 14N08">
+        <div class="seg" id="start-paved" role="group" aria-label="Paved or unpaved">
+          <button type="button" data-v="Paved" aria-pressed="false">Paved</button>
+          <button type="button" data-v="Unpaved" aria-pressed="false">Unpaved</button>
+        </div>
+      </div>
+      <label class="check-row"><input type="checkbox" id="custom-area"> <span>Custom area description (this trail differs from the rest of the area)</span></label>
+      <textarea id="custom-area-text" rows="3" hidden placeholder="Just for this trail, e.g. burned over ponderosa"></textarea>
+    </section>
+
+    <section>
+      <div class="section-head"><span>Criteria</span><span>tap one to set or check it</span></div>
+      <div id="checklist" class="checklist"></div>
+    </section>
+
+    <section class="mic-area">
+      <button type="button" id="mic-btn" class="mic-btn" aria-label="Tap to talk">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        <span id="mic-label">Tap to talk</span>
+      </button>
+      <p id="mic-hint" class="mic-hint">Talk through the whole trail. Use the list above so nothing gets missed.</p>
+      <div id="recordings" class="recordings"></div>
+    </section>
+
+    <section class="panel">
+      <label for="said" class="small-label">Or type what you'd say (the keyboard's mic works here too)</label>
+      <textarea id="said" rows="4" placeholder="It's a point to point gravel single track, about a 10% grade..."></textarea>
+      <button type="button" id="process-btn" class="btn-primary slim">Find the answers</button>
+    </section>
+
+    <section>
+      <div class="section-head with-btn"><span id="poi-head">POIs</span>
+        <button type="button" id="poi-add" class="plus-btn" aria-label="Add POIs"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+      <div id="poi-list" class="poi-list"></div>
+      <label class="check-row" id="no-pois-row"><input type="checkbox" id="no-pois"> <span>No POIs on this trail</span></label>
+    </section>
+
+    <section>
+      <div class="section-head"><span>Trail summary</span></div>
+      <div id="summary" class="panel summary-box" aria-live="polite"></div>
+      <span id="summary-gaps" class="summary-gaps"></span>
+    </section>
+
+    <p id="complete-note" class="summary-gaps"></p>
+    <button type="button" id="complete-btn" class="btn-primary wide">Completed</button>
+    <button type="button" id="abandon-btn" class="btn-warn wide">Abandon trail</button>
+    <button type="button" id="reopen-btn" class="btn-ghost wide" hidden>Reopen this trail</button>
+    <button type="button" id="trail-delete" class="btn-danger wide">Delete this trail</button>
+  </div>
+</section>
+</div>
+
+<!-- pop-up sheet (answer one criterion, add a POI, processing) -->
+<div id="sheet-wrap" class="sheet-wrap" hidden>
+  <div id="sheet" class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <div class="sheet-head"><h2 id="sheet-title"></h2><button type="button" id="sheet-close" class="icon-btn" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div id="sheet-body" class="sheet-body"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" role="status" hidden></div>
+
+<!-- full-screen trail marker for the GoPro photo: tap anywhere to close -->
+<div id="marker-wrap" class="marker-wrap" hidden role="dialog" aria-label="Trail marker. Tap to close.">
+  <canvas id="marker-canvas" width="1100" height="850"></canvas>
+</div>
+
+<script src="js/parse.js"></script>
+<script src="js/criteria.js"></script>
+<script src="js/db.js"></script>
+<script src="js/stt.js"></script>
+<script src="js/marker.js"></script>
+<script src="js/summary.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 // Offline: keep a copy of the app on the phone, so it opens with no signal.
 // Bump VERSION whenever any app file changes, so phones pick up the update.
-const VERSION = "trail-notes-v0.15.1";
+const VERSION = "trail-notes-v0.15.2";
 const CDN = "trail-notes-cdn"; // the speech library, kept across updates
 const SPEECH = "trail-notes-speech"; // the speech model installed with the app, kept across updates
 const FILES = [

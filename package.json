@@ -1,6 +1,6 @@
 {
   "name": "trail-notes",
-  "version": "0.1.0",
+  "version": "0.15.2",
   "private": true,
   "description": "Trail Notes: offline field notes for trail mapping (Project 3).",
   "scripts": {

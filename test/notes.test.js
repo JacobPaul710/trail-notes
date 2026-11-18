@@ -263,3 +263,83 @@ test("exact Nov 8 sentence, with hyphenated points-of-point", () => {
   assert.equal(pickAnswers("it's out-and-back").type.value, "Out-and-back");
   assert.equal(findGrade("8-10 percent grade").heard, 10);
 });
+
+test("states: area names, groups and most-recent order", () => {
+  const S = require("../js/states");
+  assert.deepEqual(S.parseArea("CA - Tahoe"), { code: "CA", short: "Tahoe" });
+  assert.deepEqual(S.parseArea("wa-Gifford"), { code: "WA", short: "Gifford" });
+  assert.deepEqual(S.parseArea("Mount Hood"), { code: "", short: "Mount Hood" });
+  assert.deepEqual(S.parseArea("ZZ - Nowhere"), { code: "", short: "ZZ - Nowhere" });
+  const areas = [
+    { id: 1, name: "CA - Tahoe", at: 10, worked: 50 },
+    { id: 2, name: "WA - Gifford", at: 20 },
+    { id: 3, name: "CA - Trinity", at: 30, worked: 90 },
+    { id: 4, name: "Old area", at: 99 },
+  ];
+  const g = S.group(areas);
+  assert.deepEqual(g.map((x) => x.code), ["CA", "WA", ""]);
+  assert.deepEqual(g[0].areas.map((a) => a.name), ["CA - Trinity", "CA - Tahoe"]);
+  assert.equal(g[0].name, "California");
+  assert.ok(S.OUTLINES.WA && S.OUTLINES.OR && S.OUTLINES.CA);
+});
+
+test("a location on the Locations list is found by its state, and a tab that isn't there is told apart", () => {
+  assert.deepEqual(P.areasFromRows([["Locations", "State"], ["Mt. Hood", "OR"], ["Tahoe", "CA"], ["Gifford", ""], ["CA - Trinity", ""]]), ["OR - Mt. Hood", "CA - Tahoe", "Gifford", "CA - Trinity"]);
+  const tahoe = [["Trail #", "Trail Name", "Date Completed", "Status", "", "Location:", "CA - Tahoe"]];
+  assert.equal(P.tabIsMissing(tahoe, "CA - Tahoe"), false);
+  assert.equal(P.tabIsMissing(tahoe, "OR - Mt. Hood"), true);   // Google handed back the first tab instead
+  assert.equal(P.tabIsMissing([["Trail #", "Trail Name"]], "Anything"), false);
+  assert.equal(P.areaFromRows(tahoe), "CA - Tahoe");
+});
+
+// ---------- trail timing: Start / Pause / Resume ----------
+const T = require("../js/timing.js");
+
+test("timing: start, pause, resume make segments; a forked trail comes back to its first trail", () => {
+  const one = { number: 1 }, two = { number: 2 };
+  assert.equal(T.stateOf(one), "none");
+  assert.equal(T.start(one, 1000), true);
+  assert.equal(T.start(one, 1500), false);                 // already running
+  assert.equal(T.stateOf(one), "running");
+  T.pause(one, 5000);                                       // the fork: pause trail 1
+  T.start(two, 5100);                                       // drive trail 2
+  T.pause(two, 9000);
+  T.start(one, 9500);                                       // back on trail 1: resume
+  T.pause(one, 12000);
+  assert.deepEqual(T.windows(one, 99999), [{ start: 1000, end: 5000 }, { start: 9500, end: 12000 }]);
+  assert.deepEqual(T.windows(two, 99999), [{ start: 5100, end: 9000 }]);
+  assert.equal(T.totalMs(one, 0), 6500);
+});
+
+test("timing: a third trail interrupting the second works the same way (each trail keeps its own segments)", () => {
+  const a = { number: 1 }, b = { number: 2 }, c = { number: 3 };
+  T.start(a, 0); T.pause(a, 10); T.start(b, 11); T.pause(b, 20); T.start(c, 21); T.pause(c, 30); T.start(b, 31); T.pause(b, 40); T.start(a, 41); T.pause(a, 50);
+  assert.deepEqual(T.windows(b, 0), [{ start: 11, end: 20 }, { start: 31, end: 40 }]);
+  assert.deepEqual(T.windows(c, 0), [{ start: 21, end: 30 }]);
+  assert.deepEqual(T.windows(a, 0), [{ start: 0, end: 10 }, { start: 41, end: 50 }]);
+});
+
+test("timing: running / paused lists, finished trails leave the Resume list, zero-length taps are dropped", () => {
+  const a = { number: 1, status: "in-progress" }, b = { number: 2, status: "in-progress" }, d = { number: 3, status: "done" };
+  T.start(a, 100); T.pause(a, 200); T.start(b, 300); T.start(d, 10); T.pause(d, 20);
+  assert.equal(T.running([a, b, d]).number, 2);
+  assert.deepEqual(T.paused([a, b, d]).map((c) => c.number), [1]);   // 3 is done, 2 is running
+  const z = { number: 9 }; T.start(z, 500); T.pause(z, 500);
+  assert.equal(T.stateOf(z), "none");
+});
+
+test("timing: export carries the segments (a running one closed at 'now') and the camera clock offset", () => {
+  const a = { number: 1 };
+  assert.equal(T.forExport(a, 1), null);
+  T.start(a, 1000, 4200);
+  assert.deepEqual(T.forExport(a, 3000), { segments: [{ start: 1000, end: 3000 }], cameraClockOffsetMs: 4200 });
+  assert.equal(T.clock(125000), "2:05");
+  assert.equal(T.clock(3725000), "1:02:05");
+});
+
+test("timing: the GoPro's clock answer is read in a few spellings", () => {
+  const want = new Date(2026, 9, 8, 14, 22, 5).getTime();
+  assert.equal(T.parseCameraClock({ date: "2026_10_08", time: "14_22_05", tzone: -420 }), want);
+  assert.equal(T.parseCameraClock('{"date":"2026-10-08","time":"14:22:05"}'), want);
+  assert.equal(T.parseCameraClock({ nothing: 1 }), null);
+});

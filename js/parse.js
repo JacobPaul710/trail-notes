@@ -95,13 +95,26 @@
     return `https://docs.google.com/spreadsheets/d/${sheet.id}/gviz/tq?tqx=out:csv${which}`;
   }
 
-  /** The Areas tab: "Areas" on top, one area (tab name) per row. Null if these rows aren't that list. */
+  /** The Locations tab ("Areas" on older sheets): "Locations" on top, one area (tab name) per row. Null if these rows aren't that list. */
   function areasFromRows(rows) {
     const clean = rows.map((r) => r.map((c) => String(c || "").trim()));
-    if (!clean.length || !/^areas?$/i.test(clean[0][0] || "")) return null;
+    if (!clean.length || !/^(areas?|locations?)$/i.test(clean[0][0] || "")) return null;
     const out = [];
-    for (const r of clean.slice(1)) if (r[0] && !out.includes(r[0])) out.push(r[0]);
+    for (const r of clean.slice(1)) {
+      // Column B is the state: the tab for "Mt. Hood" with state OR is "OR - Mt. Hood".
+      const name = r[0] && r[1] && /^[A-Za-z]{2}$/.test(r[1]) && !/^[A-Za-z]{2}\s*[-–—]\s*\S/.test(r[0]) ? `${r[1].toUpperCase()} - ${r[0]}` : r[0];
+      if (name && !out.includes(name)) out.push(name);
+    }
     return out;
+  }
+
+  /**
+   * Google answers a request for a tab that doesn't exist with the first tab instead. Every tab's summary box
+   * says its own name in G1, so a G1 that names a different tab means the asked-for tab isn't there.
+   */
+  function tabIsMissing(rows, name) {
+    const g1 = String((rows[0] || [])[6] || "").trim();
+    return !!g1 && g1.toLowerCase() !== String(name).trim().toLowerCase();
   }
 
   /** CSV text -> rows of cells (handles quotes, commas and line breaks inside quotes). */
@@ -152,7 +165,7 @@
   function areaFromRows(rows) {
     for (const row of rows.slice(0, 15)) {
       const cells = row.map((c) => String(c || "").trim());
-      const i = cells.findIndex((c) => /^area(\s*\/\s*region)?\s*:?$/i.test(c));
+      const i = cells.findIndex((c) => /^(area(\s*\/\s*region)?|location)\s*:?$/i.test(c));
       if (i < 0) continue;
       const name = cells.slice(i + 1).find(Boolean);
       if (name) return name;
@@ -240,7 +253,7 @@
     return h !== null && h > 0 ? h : null;
   }
 
-  const api = { parseMiles, parseHours, parseLengthTime, wordsToNumber, normalizeDate, parseTrailList, sheetFromLink, csvUrl, parseCSV, rowsToTrails, areaFromRows, areasFromRows };
+  const api = { parseMiles, parseHours, parseLengthTime, wordsToNumber, normalizeDate, parseTrailList, sheetFromLink, csvUrl, parseCSV, rowsToTrails, areaFromRows, areasFromRows, tabIsMissing };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else (root.TN = root.TN || {}).parse = api;
 })(typeof self !== "undefined" ? self : this);

@@ -1,6 +1,6 @@
 // Offline: keep a copy of the app on the phone, so it opens with no signal.
 // Bump VERSION whenever any app file changes, so phones pick up the update.
-const VERSION = "trail-notes-v0.15.2";
+const VERSION = "trail-notes-v0.19.2";
 const CDN = "trail-notes-cdn"; // the speech library, kept across updates
 const SPEECH = "trail-notes-speech"; // the speech model installed with the app, kept across updates
 const FILES = [
@@ -11,12 +11,15 @@ const FILES = [
   "manifest.webmanifest",
   "js/theme-early.js",
   "js/parse.js",
+  "js/states.js",
+  "js/timing.js",
   "js/criteria.js",
   "js/db.js",
   "js/stt.js",
   "js/stt-worker.js",
   "js/config.js",
   "js/drive.js",
+  "js/board.js",
   "privacy.html",
   "terms.html",
   "js/marker.js",
@@ -26,6 +29,17 @@ const FILES = [
   "img/marker-digits.png",
   "img/marker-topo-tall.webp",
   "img/brand.png",
+  "img/brand-green.png",
+  "img/brand-dusk.png",
+  "img/brand-mono.png",
+  "icons/apple-touch-icon-dusk.png",
+  "icons/apple-touch-icon-mono.png",
+  "icons/favicon-32-dusk.png",
+  "icons/favicon-32-mono.png",
+  "icons/favicon-64-dusk.png",
+  "icons/favicon-64-mono.png",
+  "icons/icon-192-dusk.png",
+  "icons/icon-192-mono.png",
   "icons/favicon-32.png",
   "icons/favicon-64.png",
   "icons/icon-192.png",
@@ -76,6 +90,7 @@ self.addEventListener("fetch", (e) => {
     return;
   }
   if (url.origin !== self.location.origin) return; // the model files are kept by the speech library itself
+  if (url.pathname.endsWith("/version.json")) return; // the update check always asks the network
   e.respondWith(
     caches.match(req, { ignoreSearch: true }).then(
       (hit) =>

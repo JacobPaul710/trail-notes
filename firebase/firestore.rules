@@ -1,0 +1,19 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Every signed-in scout can read the Hall of Scouts. Each scout can only write their own entry.
+    match /scouts/{uid} {
+      allow read: if request.auth != null;
+      allow create, update: if request.auth != null && request.auth.uid == uid
+        && get(/databases/$(database)/documents/usernames/$(request.resource.data.username.lower())).data.uid == uid;
+      allow delete: if false;
+    }
+    // A username can be claimed once, by whoever asks first, and never taken over.
+    match /usernames/{name} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null && request.resource.data.uid == request.auth.uid
+        && name == name.lower() && name.matches('[a-z0-9_]{3,16}');
+      allow update, delete: if false;
+    }
+  }
+}

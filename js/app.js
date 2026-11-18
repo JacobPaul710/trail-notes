@@ -99,7 +99,13 @@
     return !!(a && a.status === "answered" && (a.values || [a.value]).includes("Connects to another path"));
   };
   const isFinished = (c) => c.status === "done" || c.status === "abandoned";
-  const REASONS = ["Fallen tree too early", "Private gate too early", "Overgrown too early"];
+  // "Not completed": a trail driven less than MIN_MILES is Partial (began) or Officially closed (never began). 0.55 because onX rounds it up to 0.6 and counts that as completed.
+  const MIN_MILES = 0.55;
+  const PARTIAL_REASONS = ["Gate", "Downed tree", "Abandoned with overgrowth"];
+  const CLOSED_REASONS = ["Gate", "Unidentifiable with overgrowth", "Intentional barrier"];
+  // Used when the sheet's own dropdown can't be read (offline, or not signed in yet).
+  const VEHICLES = ["Dirt Bike", "Quad", "High Clearance 4x4 ", 'SXS 60"', "Full Width SUV"];
+  const OUTCOME_LABEL = { partial: "Early turnaround", closed: "Officially closed" };
 
   function setBar(id, frac) {
     const bar = $(id);
@@ -168,7 +174,7 @@
 
   function show(view) {
     state.view = view;
-    for (const v of ["areas", "area", "start", "card"]) $(`view-${v}`).hidden = v !== view;
+    for (const v of ["areas", "area", "start", "card", "hall"]) $(`view-${v}`).hidden = v !== view;
     window.scrollTo(0, 0);
   }
 
@@ -238,7 +244,8 @@
     return {
       app: "trail-notes", version: 1,
       area: area.name, areaId: area.id, number: card.number, name: card.name, date: card.date || "",
-      status: card.status || "in-progress", savedForLater: !!card.savedForLater, abandonReason: card.abandonReason || "", finishedAt: card.finishedAt || null,
+      vehicle: area.vehicle || "",
+      status: card.status || "in-progress", outcome: card.outcome || "", savedForLater: !!card.savedForLater, abandonReason: card.abandonReason || "", finishedAt: card.finishedAt || null,
       startFrom: card.startFrom || "", startPaved: card.startPaved || "", endsAt: card.endsAt || "", endsPaved: card.endsPaved || "",
       curatorNote: card.curatorOn ? String(card.curatorNote || "").trim() : "",
       miles: card.miles > 0 ? card.miles : "", hours: card.hours > 0 ? card.hours : "", milesText: card.milesText || "", timeText: card.timeText || "",
@@ -247,6 +254,7 @@
       answers, restrictions: card.restrictions || [], noPois: !!card.noPois, pois: (card.pois || []).map((p) => ({ type: p.type, name: p.note || "" })),
       summary: TN.summary.toText(TN.summary.build({ ...card, areaText })),
       said: (card.said || []).map((x) => x.text),
+      timing: TN.timing.forExport(card, Date.now()),
       updatedAt: card.updatedAt, writtenAt: Date.now(),
     };
   }
@@ -264,28 +272,28 @@
     const who = drive.account();
     if (!$("sync-dot").classList.contains("link-dot")) $("sync-dot").replaceWith(Object.assign(el("span", "link-dot"), { id: "sync-dot" }));
     const dot = $("sync-dot");
+    $("sync-title").textContent = "Google Drive";
+    const email = $("sync-email");
+    email.textContent = drive.linked() ? who || "" : "";
+    email.hidden = !email.textContent;
     if (!drive.linked()) {
-      dot.className = "link-dot";
-      $("sync-title").textContent = waiting ? `${plural(waiting, "trail", "trails")} not backed up yet` : "Not synced yet";
-      $("sync-sub").textContent = "Sign in with Google to back up your trails";
+      dot.className = "link-dot idle";
+      $("sync-sub").textContent = waiting ? `Unlinked · ${plural(waiting, "trail", "trails")} not backed up yet` : "Unlinked · sign in to back up your trails";
       btn.textContent = "Sign in to sync";
       btn.disabled = !on;
     } else if (state.syncError) {
       dot.className = "link-dot bad";
-      $("sync-title").textContent = "Sync problem";
-      $("sync-sub").textContent = state.syncError;
+      $("sync-sub").textContent = `Sync problem: ${state.syncError}`;
       btn.textContent = "Try again";
       btn.disabled = !on;
     } else if (waiting) {
       dot.className = "link-dot idle";
-      $("sync-title").textContent = `${plural(waiting, "trail", "trails")} waiting to sync`;
-      $("sync-sub").textContent = `${who ? who + " · " : ""}${on ? "Tap Sync to send them to your Drive" : "they'll send when you have signal"}`;
+      $("sync-sub").textContent = `Linked · ${plural(waiting, "trail", "trails")} waiting to sync${on ? "" : " (they'll send when you have signal)"}`;
       btn.textContent = "Sync";
       btn.disabled = !on;
     } else {
       dot.className = "link-dot ok";
-      $("sync-title").textContent = last ? `All synced · ${dayClock(last)}` : "Signed in · nothing to sync yet";
-      $("sync-sub").textContent = who ? `Signed in as ${who}` : "Signed in to Google";
+      $("sync-sub").textContent = last ? `Linked · synced ${dayClock(last)}` : "Linked · nothing to sync yet";
       btn.textContent = "Sync";
       btn.disabled = !on;
     }
@@ -296,8 +304,6 @@
     if (g) {
       g.textContent = drive.linked() ? `Signed in${drive.account() ? ` as ${drive.account()}` : ""}. Trails save to the Trail Notes folder in your Drive.` : "Not signed in.";
       $("drawer-signout").hidden = !drive.linked();
-      $("drawer-switch").hidden = !drive.linked();
-      $("drawer-redirect").textContent = `Sign-in address: ${drive.redirectUri()}`;
     }
   }
 
@@ -329,6 +335,114 @@
     return tracked ? ` ${plural(tracked, "trail", "trails")} marked Tracked on your sheet.` : "";
   }
 
+
+  // ---------- Hall of Scouts (team leaderboard) ----------
+  const hall = { tab: "longest", scouts: [], mine: null, open: null };
+  const fmtVal = (tab, s) => tab.unit === "mi" ? `${Number(s[tab.field]).toLocaleString(undefined, { maximumFractionDigits: 2 })} mi` : `${s[tab.field]}`;
+  async function myStats() { return TN.board.computeStats(await db.all("areacards")); }
+
+  /** Send this scout's numbers (quietly). Needs a username, a Firebase sign-in and signal. */
+  async function boardPush() {
+    const B = TN.board;
+    const name = localStorage.getItem("tn-board-name");
+    if (!B.ready() || !name || !B.signedIn() || !navigator.onLine) return;
+    await B.push(name, await myStats());
+  }
+
+  function hallMsg(text, btnText, onBtn) {
+    const body = $("hall-body");
+    body.replaceChildren(el("div", "hall-title", "~ Hall of Scouts ~"), el("p", "hall-msg", text));
+    if (btnText) { const b = el("button", "hall-btn", btnText); b.type = "button"; b.addEventListener("click", onBtn); const w = el("div", "hall-msg"); w.append(b); body.append(w); }
+  }
+
+  async function renderHall() {
+    const B = TN.board;
+    if (!B.ready()) return hallMsg("The Hall of Scouts isn't set up yet.");
+    if (!navigator.onLine) return hallMsg("The Hall of Scouts needs signal. Try again when you're back online.", "Try again", renderHall);
+    if (!drive.tokenValid()) return hallMsg("Sign in with Google to join the Hall of Scouts. Your Google account is how you sign in and how you recover your name.", "Sign in with Google", () => drive.signIn());
+    hallMsg("Loading…");
+    try {
+      if (!B.signedIn()) await B.signIn(drive.accessToken());
+      const mine = await B.me();
+      if (!mine) return hallPickName();
+      localStorage.setItem("tn-board-name", mine.username);
+      await B.push(mine.username, await myStats());
+      hall.mine = { ...mine, ...(await myStats()) };
+      hall.scouts = await B.list();
+      hall.open = null;
+      hallBoard();
+    } catch (e) {
+      if (e.code === "AUTH") { B.signOut(); return hallMsg("Your sign-in ran out. Tap to sign in again.", "Sign in with Google", () => drive.signIn(true)); }
+      hallMsg(e.message || "Something went wrong.", "Try again", renderHall);
+    }
+  }
+
+  function hallPickName() {
+    const body = $("hall-body");
+    const input = el("input"); input.type = "text"; input.maxLength = 16; input.autocomplete = "off"; input.autocapitalize = "off"; input.placeholder = "Your scout name"; input.setAttribute("aria-label", "Scout name");
+    const err = el("div", "hall-err"); err.setAttribute("aria-live", "polite");
+    const go = el("button", "hall-btn", "Join the Hall"); go.type = "button";
+    go.addEventListener("click", async () => {
+      err.textContent = ""; go.disabled = true;
+      try {
+        const why = await TN.board.claim(input.value.trim());
+        if (why) { err.textContent = why; go.disabled = false; return; }
+        const name = input.value.trim();
+        await TN.board.push(name, await myStats());   // creates the scout's entry, so the name sticks
+        localStorage.setItem("tn-board-name", name);
+        await renderHall();
+      } catch (e) { err.textContent = e.code === "AUTH" ? "Sign-in ran out. Go back and try again." : (e.message || "Try again."); go.disabled = false; }
+    });
+    const form = el("div", "hall-form"); form.append(input, err, go);
+    body.replaceChildren(el("div", "hall-title", "~ Hall of Scouts ~"), el("p", "hall-msg", "Pick the name that will show on the high scores. Everyone on the team will see it, along with your numbers. 3 to 16 letters, numbers or underscores. You can't change it later."), form);
+  }
+
+  function hallBoard() {
+    const B = TN.board;
+    const tab = B.TABS.find((t) => t.id === hall.tab) || B.TABS[0];
+    const rows = B.rank(hall.scouts, tab.field);
+    const body = $("hall-body");
+    const tabs = el("div", "hall-tabs"); tabs.setAttribute("role", "tablist");
+    for (const t of B.TABS) {
+      const b = el("button", "hall-tab", t.label); b.type = "button"; b.setAttribute("role", "tab"); b.setAttribute("aria-selected", String(t.id === tab.id));
+      b.addEventListener("click", () => { hall.tab = t.id; hall.open = null; hallBoard(); });
+      tabs.append(b);
+    }
+    const table = el("div", "hall-table");
+    const head = el("div", "hall-head"); head.append(el("span", "hall-r", "Rank"), el("span", "hall-n", "Name"), el("span", "", tab.unit === "mi" ? "Miles" : "Trails"));
+    table.append(head);
+    if (!rows.length) table.append(el("p", "hall-msg", "No scores yet. Finish a trail and sync to get on the board."));
+    for (const s of rows) {
+      const row = el("div", "hall-row" + (s.id === B.uid() ? " me" : ""));
+      const main = el("button", "hall-row-main"); main.type = "button";
+      main.append(el("span", "hall-r", String(s.rank)), el("span", "hall-n", s.username), el("span", "", fmtVal(tab, s)));
+      main.addEventListener("click", () => { hall.open = hall.open === s.id ? null : s.id; hallBoard(); });
+      row.append(main);
+      if (hall.open === s.id) {
+        const more = el("div", "hall-more"); const pb = el("button", "hall-btn alt", "See profile"); pb.type = "button";
+        pb.addEventListener("click", () => hallProfile(s)); more.append(pb); row.append(more);
+      }
+      table.append(row);
+    }
+    body.replaceChildren(el("div", "hall-title", "~ Hall of Scouts ~"), el("div", "hall-sub", `Team of ${hall.scouts.length} ${hall.scouts.length === 1 ? "scout" : "scouts"}`), tabs, table);
+  }
+
+  function hallProfile(s) {
+    const B = TN.board;
+    const body = $("hall-body");
+    const tile = (v, label) => { const t = el("div", "hall-tile"); t.append(el("b", "", String(v)), el("span", "", label)); return t; };
+    const tiles = el("div", "hall-tiles");
+    tiles.append(tile(s.trails || 0, "Trails"), tile(s.season || 0, `${B.SEASON} season`), tile(Number(s.miles || 0).toLocaleString(undefined, { maximumFractionDigits: 1 }), "Miles"),
+      tile(s.longest || 0, "Longest run (mi)"), tile(s.bestDay || 0, "Best day"), tile(s.bestMonth || 0, "Best month"), tile(s.streak || 0, "Day streak"));
+    const ranks = el("div", "hall-ranks");
+    for (const t of B.TABS) {
+      const r = B.rank(hall.scouts, t.field).find((x) => x.id === s.id);
+      ranks.append(el("div", "", `${t.label}: ${r ? `#${r.rank} of ${hall.scouts.length}` : "not ranked yet"}`));
+    }
+    const back = el("button", "hall-btn", "Back to the board"); back.type = "button"; back.addEventListener("click", hallBoard);
+    body.replaceChildren(el("div", "hall-title", s.username), el("div", "hall-sub", "Scout profile"), tiles, ranks, back);
+  }
+
   async function runSync(quiet) {
     if (state.syncing) return;
     if (!navigator.onLine) { if (!quiet) notice("No signal", "Sync needs signal. Your trails are safe on this phone and will send when you're back online."); return; }
@@ -340,6 +454,7 @@
     const all = await db.all("areacards");
     const todo = all.filter(isWaiting);
     if (!todo.length) {
+      boardPush().catch(() => {});
       await renderSync(all);
       if (!quiet) notice("Nothing to send", all.some((c) => c.syncedAt) ? "Everything is already in your Drive." : "Nothing to send yet. Trails go to Drive once you've started on them.");
       return;
@@ -347,8 +462,7 @@
     state.syncing = true;
     state.syncError = "";
     $("sync-btn").disabled = true;
-    $("sync-title").textContent = `Syncing ${plural(todo.length, "trail", "trails")}…`;
-    $("sync-sub").textContent = "Sending to your Google Drive";
+    $("sync-sub").textContent = `Syncing ${plural(todo.length, "trail", "trails")}…`;
     $("sync-dot").replaceWith(Object.assign(loader(true), { id: "sync-dot" }));
     try {
       const files = todo.map((card) => {
@@ -371,9 +485,26 @@
       if (quiet) toast(state.syncError); else notice("Sync problem", state.syncError);
     } finally {
       state.syncing = false;
+      boardPush().catch(() => {});
       state.cards = state.area ? new Map((await db.cardsIn(state.area.id)).map((c) => [c.number, c])) : state.cards;
       await renderSync();
     }
+  }
+
+  /** A state's tinted outline with its code underneath (a plain code badge for a state with no outline yet, a folder when there is no state). */
+  function stateIcon(code) {
+    const wrap = el("span", "state-ico");
+    const path = code && TN.states.OUTLINES[code];
+    if (!code) {
+      const f = icon("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z");
+      f.classList.add("folder-icon");
+      wrap.append(f);
+      return wrap;
+    }
+    if (path) wrap.append(icon(path));
+    wrap.append(el("i", "", code));
+    if (!path) wrap.classList.add("no-shape");
+    return wrap;
   }
 
   async function renderAreas() {
@@ -383,7 +514,8 @@
     $("no-areas").hidden = state.areas.length > 0;
     renderSheetPanel();
     let allDone = 0, allTrails = 0;
-    for (const a of state.areas) {
+    const S = TN.states;
+    const card = (a) => {
       const cards = all.filter((c) => c.area === a.id);
       let done = 0, check = 0;
       for (const c of cards) {
@@ -392,18 +524,28 @@
       }
       const frac = a.trails.length ? Math.min(1, done / a.trails.length) : 0;
       allDone += done; allTrails += a.trails.length;
+      const { code, short } = S.parseArea(a.name);
       const b = el("button", `trail-card${check ? " check" : ""}`);
       b.type = "button";
-      const folder = icon("M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z");
-      folder.classList.add("folder-icon");
-      const main = el("div", "trail-main");
-      main.append(el("strong", "", a.name));
-      main.append(el("span", check ? "check" : "", `${plural(a.trails.length, "trail", "trails")} · ${done} done${check ? ` · ${check} to check` : ""}`));
-      const chev = icon("M9 5l7 7-7 7");
-      chev.classList.add("chev");
-      b.append(folder, main, pctRing(frac), chev);
+      b.append((() => {
+        const main = el("div", "trail-main");
+        main.append(el("strong", "", short));
+        main.append(el("span", check ? "check" : "", `${plural(a.trails.length, "trail", "trails")} · ${done} done${check ? ` · ${check} to check` : ""}`));
+        return main;
+      })(), pctRing(frac), (() => { const chev = icon("M9 5l7 7-7 7"); chev.classList.add("chev"); return chev; })());
       b.addEventListener("click", () => openArea(a.id));
-      list.append(b);
+      return b;
+    };
+    const groups = S.group(state.areas);
+    for (const g of groups) {
+      const box = el("div", "state-group");
+      const head = el("div", "state-head");
+      head.append(stateIcon(g.code), el("span", "", g.name));
+      box.append(head);
+      const inner = el("div", "card-list");
+      for (const a of g.areas) inner.append(card(a));
+      box.append(inner);
+      list.append(box);
     }
     await loadWaiting();
     await renderSync(all);
@@ -419,12 +561,14 @@
     $("check-status").textContent = "";
     $("area-desc").value = a.desc || "";
     if (state.descButton) state.descButton();
+    renderVehicle(a);
     await loadWaiting();
     renderArea();
     show("area");
   }
 
   function renderArea() {
+    renderTimingStrip().catch(() => {});
     const a = state.area;
     $("area-name").textContent = a.name;
     $("area-sub").textContent = plural(a.trails.length, "trail", "trails");
@@ -444,7 +588,7 @@
       const main = el("div", "trail-main");
       main.append(el("strong", "", t.name));
       let sub, subClass = "";
-      if (card.status === "abandoned") sub = `Abandoned${card.abandonReason ? ` · ${card.abandonReason}` : ""}`;
+      if (card.status === "abandoned") sub = `${OUTCOME_LABEL[card.outcome] || "Abandoned"}${card.abandonReason ? ` · ${card.abandonReason}` : ""}`;
       else if (card.status === "done") sub = `Completed${p.waiting ? " · a recording still needs turning into text" : ""}`;
       else if (p.unclear) { sub = plural(p.unclear, "answer to check", "answers to check"); subClass = "check"; }
       else if (p.waiting) { sub = "A recording still needs turning into text"; subClass = "check"; }
@@ -647,41 +791,56 @@
     // is it still linked? green = read fine last time; red = couldn't read it; amber = not checked yet
     const dot = $("sheet-dot");
     dot.className = `link-dot ${state.sheetError ? "bad" : state.sheetCheckedAt ? "ok" : "idle"}`;
-    $("sheet-state").textContent = state.sheetError ? "Trail sheet linked, but it can't be read" : "Trail sheet linked";
+    $("sheet-state").textContent = "Trail List";
     $("sheet-checked").textContent = state.sheetError
-      ? state.sheetError
-      : state.sheetCheckedAt ? `Last checked ${dayClock(state.sheetCheckedAt)}${navigator.onLine ? "" : " · offline now"}` : "Not checked yet";
+      ? `Linked, but it can't be read. ${state.sheetError}`
+      : state.sheetCheckedAt ? `Linked · checked ${dayClock(state.sheetCheckedAt)}${navigator.onLine ? "" : " · offline now"}` : "Linked · not checked yet";
     const rb = $("sheet-refresh");
     if (rb.textContent !== "Checking…") { rb.disabled = !navigator.onLine; rb.textContent = navigator.onLine ? "Refresh" : "Offline"; }
-    const box = $("sheet-areas");
-    box.textContent = "";
-    const list = state.sheetAreas || [];
-    const todo = addable();
-    for (const name of todo) {
-      const n = state.sheetCounts[name] || 0;
-      const b = el("button", "area-choice", `+ ${name} · ${plural(n, "trail", "trails")}`);
-      b.type = "button";
-      b.disabled = !navigator.onLine;
-      b.addEventListener("click", () => addAreaFromSheet(name, b));
-      box.append(b);
-    }
-    $("sheet-areas-note").textContent = !navigator.onLine && todo.length ? "needs signal to add" : "";
-    if (!list.length && !state.sheetCheckedAt) $("sheet-areas-status").textContent = navigator.onLine ? "Reading your sheet…" : "Connect to see your sheet's areas.";
-    else if (!todo.length) $("sheet-areas-status").textContent = `All locations synced${state.sheetCheckedAt ? ` · checked ${dayClock(state.sheetCheckedAt)}` : ""}. Areas show up here once they have trails.`;
-    else $("sheet-areas-status").textContent = "Tap an area to add it with all its trails.";
-    $("sheet-areas-status").className = "paste-status";
   }
 
   const onPhone = (n) => state.areas.some((a) => a.sheetTab === n || a.name.toLowerCase() === n.toLowerCase());
-  /** Areas on the sheet that have trails and aren't on this phone yet. */
-  const addable = () => (state.sheetAreas || []).filter((n) => !onPhone(n) && (state.sheetCounts[n] || 0) > 0);
+  /** The sheet's list of locations: its "Locations" tab ("Areas" on older sheets). Null if it has neither. */
+  async function locationList(link) {
+    for (const tab of ["Locations", "Areas"]) {
+      let list = null;
+      try { list = parse.areasFromRows(await fetchRows(link, tab)); } catch (e) { if (tab === "Areas") throw e; }
+      if (list) return list;
+    }
+    return null;
+  }
 
-  /** How many trails each area not on this phone has on its tab (empty tabs aren't offered). */
+  /** Locations on the sheet that have a tab (empty or not) and aren't on this phone yet. */
+  const addable = () => (state.sheetAreas || []).filter((n) => !onPhone(n) && (state.sheetCounts[n] ?? -1) >= 0);
+
+  /** Locations on the sheet show up on Home by themselves, grouped by state (except ones you deleted; Refresh brings those back). */
+  async function autoAddAreas(byHand) {
+    if (byHand === true && (state.removedAreas || []).length) {
+      state.removedAreas = [];
+      db.put("kv", [], "removedAreas").catch(() => {});
+    }
+    for (const name of addable().filter((n) => !(state.removedAreas || []).includes(n))) {
+      try {
+        const r = parse.rowsToTrails(await fetchRows(state.sheetLink, name));
+        await createArea(name, r.trails, state.sheetLink, name, true);
+      } catch (e) {
+        toast(e.message);
+        break;
+      }
+    }
+  }
+
+  /** How many trails each location not on this phone has on its tab. -1 = it's on the list but has no tab yet. */
   async function countSheetTrails(link, list) {
     const counts = {};
     for (const name of list) {
       if (onPhone(name)) continue;
-      counts[name] = parse.rowsToTrails(await fetchRows(link, name)).trails.length;
+      try {
+        const rows = await fetchRows(link, name);
+        counts[name] = parse.tabIsMissing(rows, name) ? -1 : parse.rowsToTrails(rows).trails.length;
+      } catch (e) {
+        counts[name] = -1;   // one unreadable tab doesn't stop the others
+      }
     }
     state.sheetCounts = counts;
     await db.put("kv", counts, "sheetCounts").catch(() => {});
@@ -692,19 +851,16 @@
     const rb = $("sheet-refresh");
     rb.disabled = true;
     rb.textContent = "Checking…";
-    const before = addable().length;
     try {
-      const list = parse.areasFromRows(await fetchRows(state.sheetLink, "Areas"));
+      const list = await locationList(state.sheetLink);
       state.sheetAreas = list || [];
       if (list) await countSheetTrails(state.sheetLink, list);
-      state.sheetError = list ? "" : "It has no Areas tab. Use the Trail Template.";
+      if (list) await autoAddAreas(byHand);
+      state.sheetError = list ? "" : "It has no Locations tab. Use the Trail Template.";
       state.sheetCheckedAt = Date.now();
       db.put("kv", state.sheetAreas, "sheetAreas").catch(() => {});
       db.put("kv", state.sheetCheckedAt, "sheetCheckedAt").catch(() => {});
-      if (byHand === true && list) {
-        const n = addable().length - before;
-        toast(n > 0 ? `Found ${plural(n, "area", "areas")} with trails to add.` : "All locations synced.");
-      }
+      if (byHand === true && list) toast("Trail List is up to date.");
     } catch (e) {
       state.sheetError = e.message;
     } finally {
@@ -720,8 +876,8 @@
     btn.disabled = true;
     btn.textContent = "Reading…";
     try {
-      const list = parse.areasFromRows(await fetchRows(link, "Areas"));
-      if (!list) throw new Error("That sheet has no Areas tab. Use the Trail Template (one tab per area).");
+      const list = await locationList(link);
+      if (!list) throw new Error("That sheet has no Locations tab. Use the Trail Template (one tab per location).");
       await countSheetTrails(link, list);
       state.sheetLink = link;
       state.sheetAreas = list;
@@ -730,6 +886,7 @@
       await db.put("kv", link, "sheetLink");
       await db.put("kv", list, "sheetAreas");
       await db.put("kv", state.sheetCheckedAt, "sheetCheckedAt");
+      await autoAddAreas();
       say("");
       renderSheetPanel();
     } catch (e) {
@@ -737,18 +894,6 @@
     } finally {
       btn.disabled = false;
       btn.textContent = "Link the sheet";
-    }
-  }
-
-  async function addAreaFromSheet(name, btn) {
-    btn.disabled = true;
-    btn.textContent = `Reading ${name}…`;
-    try {
-      const r = await fetchSheetTrails(state.sheetLink, name);
-      await createArea(name, r.trails, state.sheetLink, name, true);
-    } catch (e) {
-      toast(e.message);
-      renderSheetPanel();
     }
   }
 
@@ -820,11 +965,38 @@
     await db.put("kv", true, "restoredCompleted1");
   }
 
+  /** The "Vehicle used" choice for an area. Options come from the sheet's dropdown when they can be read; else the usual list. */
+  function renderVehicle(a) {
+    const sel = $("area-vehicle");
+    const list = a.vehicleOptions && a.vehicleOptions.length ? a.vehicleOptions : VEHICLES;
+    sel.textContent = "";
+    const blank = el("option", "", "Not chosen (High Clearance 4x4)");
+    blank.value = "";
+    sel.append(blank);
+    for (const v of [...list, ...(a.vehicle && !list.includes(a.vehicle) ? [a.vehicle] : [])]) {
+      const o = el("option", "", v.trim());
+      o.value = v;
+      sel.append(o);
+    }
+    sel.value = a.vehicle || "";
+    if (!a.vehicleOptions && a.sheetLink && a.sheetTab && drive.linked() && navigator.onLine) {
+      const sheet = parse.sheetFromLink(a.sheetLink);
+      if (sheet) drive.vehicleOptions(sheet.id, a.sheetTab).then(async (opts) => {
+        if (!opts) return;
+        a.vehicleOptions = opts;
+        await saveAreas();
+        if (state.area === a) renderVehicle(a);
+      }).catch(() => {});
+    }
+  }
+
   async function saveForLater() {
     const card = state.current;
+    TN.timing.pause(card, Date.now());
     card.status = "in-progress";
     card.savedForLater = true;
     delete card.abandonReason;
+    delete card.outcome;
     delete card.finishedAt;
     await saveCard();
     await leaveToList();
@@ -832,7 +1004,9 @@
 
   async function finishTrail() {
     const card = state.current;
+    TN.timing.pause(card, Date.now());
     card.status = "done";
+    card.outcome = "drivable";   // goes in the data for Trail Engine; the trail list still just says Completed
     delete card.savedForLater;
     delete card.abandonReason;
     card.finishedAt = Date.now();
@@ -843,38 +1017,66 @@
   function abandonTrail() {
     const card = state.current;
     const body = el("div");
-    body.append(el("p", "confirm-text", "Why couldn't you finish this trail?"));
-    let reason = "";
-    const bubbles = el("div", "bubbles");
-    const go = el("button", "btn-warn", "Abandon trail");
-    go.type = "button";
-    go.disabled = true;
-    for (const r of REASONS) {
-      const b = el("button", "bubble", r);
-      b.type = "button";
-      b.setAttribute("aria-pressed", "false");
-      b.addEventListener("click", () => {
-        reason = r;
-        for (const x of bubbles.children) { x.classList.toggle("on", x === b); x.setAttribute("aria-pressed", String(x === b)); }
-        go.disabled = false;
-      });
-      bubbles.append(b);
-    }
-    go.addEventListener("click", async () => {
-      card.status = "abandoned";
-      card.abandonReason = reason;
-      card.finishedAt = Date.now();
-      await saveCard();
-      closeSheet();
-      await leaveToList();
-    });
     const keep = el("button", "btn-ghost", "Keep this trail");
     keep.type = "button";
     keep.addEventListener("click", closeSheet);
-    const row = el("div", "confirm-row");
-    row.append(keep, go);
-    body.append(bubbles, row);
-    openSheet("Abandon this trail?", body);
+    const yesNo = (text, onYes, onNo) => {
+      body.textContent = "";
+      body.append(el("p", "confirm-text", text));
+      const row = el("div", "confirm-row");
+      const no = el("button", "btn-ghost", "No"); no.type = "button"; no.addEventListener("click", onNo);
+      const yes = el("button", "btn-ghost", "Yes"); yes.type = "button"; yes.addEventListener("click", onYes);
+      row.append(no, yes);
+      body.append(row);
+    };
+    const pickReason = (text, reasons, outcome) => {
+      body.textContent = "";
+      body.append(el("p", "confirm-text", text));
+      let reason = "";
+      const bubbles = el("div", "bubbles");
+      const go = el("button", "btn-warn", "Not completed");
+      go.type = "button";
+      go.disabled = true;
+      for (const r of reasons) {
+        const b = el("button", "bubble", r);
+        b.type = "button";
+        b.setAttribute("aria-pressed", "false");
+        b.addEventListener("click", () => {
+          reason = r;
+          for (const x of bubbles.children) { x.classList.toggle("on", x === b); x.setAttribute("aria-pressed", String(x === b)); }
+          go.disabled = false;
+        });
+        bubbles.append(b);
+      }
+      go.addEventListener("click", async () => {
+        TN.timing.pause(card, Date.now());
+        card.status = "abandoned";
+        card.outcome = outcome;
+        card.abandonReason = reason;
+        card.finishedAt = Date.now();
+        delete card.savedForLater;
+        await saveCard();
+        closeSheet();
+        await leaveToList();
+      });
+      const row = el("div", "confirm-row");
+      row.append(keep, go);
+      body.append(bubbles, row);
+    };
+    const began = () => yesNo("Were you able to begin the trail?",
+      () => pickReason(`Why did you turn around before ${MIN_MILES} miles?`, PARTIAL_REASONS, "partial"),
+      () => pickReason("Why couldn't you start the trail?", CLOSED_REASONS, "closed"));
+    const start = () => yesNo(`Did you drive at least ${MIN_MILES} miles?`, () => {
+      // Stop here: that far counts as a completed trail in onX, so it can't be logged as not completed.
+      body.textContent = "";
+      body.append(el("p", "confirm-text", `Driving ${MIN_MILES} miles or more counts as a completed trail. Please change your answer.`));
+      const row = el("div", "confirm-row");
+      const back = el("button", "btn-primary", "Change answer"); back.type = "button"; back.addEventListener("click", start);
+      row.append(keep, back);
+      body.append(row);
+    }, began);
+    start();
+    openSheet("Not completed", body);
   }
 
   async function deleteArea() {
@@ -889,7 +1091,8 @@
     await renderAreas();
     show("areas");
     toast(`${a.name} deleted.`);
-    if (a.sheetTab) refreshSheetAreas();   // it can be added back from the sheet
+    state.removedAreas = [...new Set([...(state.removedAreas || []), a.sheetTab || a.name])];
+    db.put("kv", state.removedAreas, "removedAreas").catch(() => {});   // stays deleted; Refresh brings it back
   }
 
   async function deleteTrail() {
@@ -988,16 +1191,16 @@
         await readAreaTab(link, state.area.sheetTab);
         return;
       }
-      const list = parse.areasFromRows(await fetchRows(link, "Areas"));
+      const list = await locationList(link);
       saveSheetLink(link);
       if (!list) {
-        // an older sheet with one area and no Areas tab: read it as it is
+        // an older sheet with one location and no Locations tab: read it as it is
         await readAreaTab(link, "");
         return;
       }
       state.areaList = list;
       renderAreaChoices();
-      sayImport(list.length ? "Pick the area." : "The Areas tab is empty. Add your areas there.", list.length ? "ok" : "warn");
+      sayImport(list.length ? "Pick the location." : "The Locations tab is empty. Add your locations there.", list.length ? "ok" : "warn");
     } catch (e) {
       sayImport(e.message, "warn");
     } finally {
@@ -1070,10 +1273,10 @@
     const t = a.trails.find((x) => x.number === number);
     const card = state.cards.get(number) || (await db.get("areacards", cardKey(a.id, number))) || blankCard(a.id, t);
     state.current = card;
+    a.worked = Date.now(); saveAreas();   // this location moves to the top
     $("card-num").textContent = `#${card.number}`;
     $("card-name").textContent = card.name;
     $("card-date").textContent = card.date || "";
-    $("said").value = "";
     await loadWaiting();
     $("start-from").value = card.startFrom || "";
     $("custom-area").checked = !!card.customArea;
@@ -1089,6 +1292,7 @@
     setPaved(card.startPaved || "");
     $("marker-label").textContent = `Show marker #${card.number}`;
     renderMarkerNote();
+    renderTiming();
     renderCard();
     await renderRecordings();
     show("card");
@@ -1113,6 +1317,7 @@
     c.updatedAt = Date.now();   // anything newer than the last sync is waiting to go to Drive
     state.cards.set(c.number, c);
     await db.put("areacards", c);
+    if (state.area) { state.area.worked = Date.now(); await saveAreas(); }   // this location moves to the top
   }
 
   function setPaved(v) {
@@ -1145,7 +1350,7 @@
     $("complete-btn").hidden = fin;
     $("abandon-btn").hidden = fin;
     $("reopen-btn").hidden = !fin;
-    $("complete-note").textContent = card.status === "abandoned" ? `Abandoned${card.abandonReason ? `: ${card.abandonReason}` : ""}` : card.status === "done" ? "Marked completed." : "";
+    $("complete-note").textContent = card.status === "abandoned" ? `${OUTCOME_LABEL[card.outcome] || "Abandoned"}${card.abandonReason ? `: ${card.abandonReason}` : ""}` : card.status === "done" ? "Marked completed." : "";
     const ringBox = $("card-ring");
     ringBox.replaceWith(Object.assign(ring(p), { id: "card-ring" }));
     const list = $("checklist");
@@ -1193,6 +1398,142 @@
         renderCard();
       });
       box.append(b);
+    }
+  }
+
+  // ---------- Trail timing: Start / Pause / Resume ----------
+  // Tap Start here when you tap Start in onX. The Trail Engine gives each trail the GoPro photos taken inside its segments.
+
+  const hm = (t) => new Date(t).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+  /** Ask a plain yes/no in the bottom sheet. */
+  function confirmAsk(title, text, label) {
+    return new Promise((resolve) => {
+      const body = el("div");
+      body.append(el("p", "confirm-text", text));
+      const row = el("div", "confirm-row");
+      const cancel = el("button", "btn-ghost", "Cancel");
+      const ok = el("button", "btn-primary", label);
+      cancel.type = ok.type = "button";
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; closeSheet(); resolve(v); };
+      cancel.addEventListener("click", () => finish(false));
+      ok.addEventListener("click", () => finish(true));
+      row.append(cancel, ok);
+      body.append(row);
+      openSheet(title, body);
+      $("sheet-close").addEventListener("click", () => { if (!done) { done = true; resolve(false); } }, { once: true });
+    });
+  }
+
+  /** Every trail card on this phone (the open one is the live object, not the saved copy). */
+  async function everyCard() {
+    const all = await db.all("areacards");
+    return all.map((c) => (state.current && c.key === state.current.key ? state.current : c));
+  }
+
+  async function putTimed(card) {
+    card.updatedAt = Date.now();
+    if (state.current && card.key === state.current.key) { await saveCard(); return; }
+    await db.put("areacards", card);
+    if (state.area && card.area === state.area.id) state.cards.set(card.number, card);
+  }
+
+  /** Start or resume `card`. If another trail is running, ask first, then pause it. Returns false if you said no. */
+  async function startTiming(card) {
+    const other = TN.timing.running((await everyCard()).filter((c) => c.key !== card.key));
+    if (other) {
+      const where = other.area === (state.area && state.area.id) ? "" : " (another location)";
+      const ok = await confirmAsk(`#${other.number} ${other.name} is still running${where}`, "Pause it first, then start this trail?", "Pause it and start");
+      if (!ok) return false;
+      TN.timing.pause(other, Date.now());
+      await putTimed(other);
+    }
+    TN.timing.start(card, Date.now(), Number.isFinite(state.clockOffsetMs) ? state.clockOffsetMs : undefined);
+    await putTimed(card);
+    return true;
+  }
+
+  async function pauseTiming(card) {
+    TN.timing.pause(card, Date.now());
+    await putTimed(card);
+  }
+
+  function renderTiming() {
+    const card = state.current;
+    if (!card) return;
+    const st = TN.timing.stateOf(card);
+    const fin = card.status === "done" || card.status === "abandoned";
+    const btn = $("timing-btn");
+    const label = $("timing-state");
+    $("timing-panel").hidden = fin && st === "none";
+    btn.disabled = fin;
+    btn.textContent = st === "running" ? "Pause" : st === "paused" ? "Resume" : "Start";
+    btn.className = st === "running" ? "btn-warn wide" : "btn-primary wide";
+    label.className = `timing-state${st === "running" ? " running" : ""}`;
+    const segs = TN.timing.windows(card, Date.now());
+    const total = TN.timing.clock(TN.timing.totalMs(card, Date.now()));
+    label.textContent = st === "running" ? `Recording · ${total}` : st === "paused" ? `Paused · ${total}` : "Not started";
+    $("timing-note").textContent = st === "none"
+      ? "Tap Start when you tap Start in onX. Pause at a fork, Resume when you're back on this trail."
+      : `${plural(segs.length, "stretch", "stretches")} so far. Started ${hm(segs[0].start)}.`;
+    $("clock-note").textContent = state.clockNote || "";
+  }
+
+  async function renderTimingStrip() {
+    const box = $("timing-strip");
+    if (!box) return;
+    const all = await everyCard();
+    const run = TN.timing.running(all);
+    const wait = TN.timing.paused(all).filter((c) => !run || c.key !== run.key);
+    box.textContent = "";
+    box.hidden = !run && !wait.length;
+    const row = (c, kind) => {
+      const r = el("div", `timing-row ${kind}`);
+      const who = el("div", "tr-name");
+      const nm = el("strong", "", `#${c.number} ${c.name}`);
+      who.append(nm, el("span", "tr-tag", kind === "running" ? "Recording" : "Paused"));
+      const b = el("button", kind === "running" ? "btn-warn slim" : "btn-primary slim", kind === "running" ? "Pause" : "Resume");
+      b.type = "button";
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        if (kind === "running") await pauseTiming(c); else await startTiming(c);
+        await renderTimingStrip();
+        if (state.current && c.key === state.current.key) renderTiming();
+      });
+      r.append(who, b);
+      return r;
+    };
+    if (run) box.append(row(run, "running"));
+    for (const c of wait) box.append(row(c, "paused"));
+  }
+
+  // The GoPro's clock, read over its Wi-Fi. Works only when this phone is on the camera's Wi-Fi and the browser lets the page reach it.
+  async function checkCameraClock() {
+    const btn = $("clock-btn");
+    btn.disabled = true;
+    state.clockNote = "Checking the GoPro…";
+    $("clock-note").textContent = state.clockNote;
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 4000);
+      const t0 = Date.now();
+      const res = await fetch("http://10.5.5.9:8080/gopro/camera/get_date_time", { signal: ctl.signal, cache: "no-store" });
+      const t1 = Date.now();
+      clearTimeout(timer);
+      const cam = TN.timing.parseCameraClock(await res.text());
+      if (cam == null) throw new Error("unreadable");
+      const offset = cam - Math.round((t0 + t1) / 2);
+      state.clockOffsetMs = offset;
+      const secs = Math.round(Math.abs(offset) / 1000);
+      state.clockNote = secs <= 3
+        ? "GoPro clock matches this phone."
+        : `GoPro clock is ${secs >= 90 ? `${Math.round(secs / 60)} min` : `${secs} s`} ${offset > 0 ? "ahead of" : "behind"} this phone. Trail Notes will note it; you can also set it on the camera.`;
+    } catch (e) {
+      state.clockNote = "Couldn't read the GoPro's clock from here. Join the GoPro's Wi-Fi first (some browsers also block this). The Engine checks the clocks again when you import.";
+    } finally {
+      btn.disabled = false;
+      $("clock-note").textContent = state.clockNote;
     }
   }
 
@@ -1521,7 +1862,6 @@
       await saveCard();
       closeSheet();
       renderCard();
-      $("said").value = "";
       showResult({ ...r, text, before });
     }, 900);
   }
@@ -1736,6 +2076,34 @@
     "Historic landmark", "Parking/staging area", "Restroom/pit toilet", "Waterfall", "Swimming hole", "Hot spring", "Water source",
     "Road closure barrier", "Other"];
 
+
+  // A different icon and color for each kind of POI.
+  const POI_LOOK = {
+    "Creek crossing": ["#4aa3df", "M3 8c2-2 3 2 5 0s3 2 5 0 3 2 5 0 3 1 3 1M5 17h3M11 17h3M17 17h3"],
+    "Lake or river": ["#3b82f6", "M3 9c2-2 3 2 5 0s3 2 5 0 3 2 5 0 3 1 3 1M3 15c2-2 3 2 5 0s3 2 5 0 3 2 5 0 3 1 3 1"],
+    "Viewpoint": ["#a78bfa", "M4 16.5L6.5 7H9v5M20 16.5L17.5 7H15v5M9 10h6M6.5 13.5a3 3 0 1 0 .01 0M17.5 13.5a3 3 0 1 0 .01 0"],
+    "Campsite": ["#f59e42", "M3 20L12 4l9 16zM12 20v-6"],
+    "Hiking trail": ["#5cc16f", "M6 21c6-3-3-6 3-9s-2-6 3-9M16 20.5v.01M18 16.5v.01"],
+    "Developed campground": ["#2fb38a", "M12 3l5 8h-3l4 6H6l4-6H7zM12 17v4"],
+    "Lookout tower": ["#ef6a5a", "M8 21l2-9h4l2 9M7 12h10M9 12V8h6v4M8 8l4-4 4 4"],
+    "Historic landmark": ["#e0b43c", "M3 21h18M5 21V10M9 21V10M15 21V10M19 21V10M3 10l9-6 9 6z"],
+    "Parking/staging area": ["#8aa0b8", "M5 4h14a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1zM9 17V8h4a2.5 2.5 0 0 1 0 5H9"],
+    "Restroom/pit toilet": ["#b08968", "M8 4.5v.01M6 21v-7H5l1-5h4l1 5h-1v7M16 4.5v.01M14 21l1-8-1.5-4h5L17 13l1 8"],
+    "Waterfall": ["#5ab0f0", "M6 3v10M10 3v13M14 3v10M18 3v13M3 20c3-2 5 2 9 0s6 2 9 0"],
+    "Swimming hole": ["#38bdf8", "M16 6v.01M7 11l5-3 3 2M4 14c2-2 3 2 5 0s3 2 5 0 3 2 6 0M3 19c2-2 3 2 5 0s3 2 5 0 3 2 6 0"],
+    "Hot spring": ["#f97393", "M8 3c-2 2 2 3 0 5M12 3c-2 2 2 3 0 5M16 3c-2 2 2 3 0 5M4 14c2-2 3 2 5 0s3 2 5 0 3 2 6 0M5 19h14"],
+    "Water source": ["#60a5fa", "M12 3s5 5.5 5 9.5a5 5 0 0 1-10 0C7 8.5 12 3 12 3zM12 11v5M9.5 13.5h5"],
+    "Road closure barrier": ["#ff5a5f", "M3 8h18v5H3zM6 13v8M18 13v8M7 8l4 5M13 8l4 5"],
+    "Other": ["#94a3b8", ICON.pin],
+  };
+  function poiIcon(type) {
+    const [color, path] = POI_LOOK[type] || POI_LOOK.Other;
+    const wrap = el("span", "poi-ico");
+    wrap.style.setProperty("--poi", color);
+    wrap.append(icon(path));
+    return wrap;
+  }
+
   function renderSummary() {
     const card = state.current;
     const paras = TN.summary.build({ ...card, areaText: areaTextFor(card) });
@@ -1781,7 +2149,7 @@
         await saveCard();
         renderPois();
       });
-      row.append(icon(ICON.pin), text, del);
+      row.append(poiIcon(p.type), text, del);
       box.append(row);
     });
   }
@@ -1813,7 +2181,8 @@
       save.textContent = picked.size > 1 ? `Add ${picked.size} POIs` : "Add POI";
     };
     for (const t of POI_TYPES) {
-      const b = el("button", "bubble", t);
+      const b = el("button", "bubble");
+      b.append(poiIcon(t), document.createTextNode(t));
       b.type = "button";
       b.setAttribute("aria-pressed", "false");
       b.addEventListener("click", () => { picked.has(t) ? picked.delete(t) : picked.add(t); sync(); });
@@ -1870,7 +2239,7 @@
     d.classList.toggle("open", open);
     d.setAttribute("aria-hidden", String(!open));
     $("scrim").hidden = !open;
-    if (open) (d.querySelector(".theme-opt[aria-checked='true']") || d.querySelector("button")).focus({ preventScroll: true });
+    if (open) (d.querySelector("button:not([hidden])")).focus({ preventScroll: true });
   }
 
   function wireSwipe() {
@@ -1906,21 +2275,33 @@
     });
   }
 
-  function applyTheme(name) {
+  /** A theme recolors everything; mode is "night" (dark) or "day" (light). */
+  function applyTheme(name, mode) {
     const t = ["green", "mono", "dusk"].includes(name) ? name : "green";
-    document.documentElement.setAttribute("data-theme", t);
+    const m = mode === "day" ? "day" : "night";
+    const root = document.documentElement;
+    root.setAttribute("data-theme", t);
+    if (m === "day") root.setAttribute("data-mode", "day");
+    else root.removeAttribute("data-mode");
+    for (const l of document.querySelectorAll('link[rel="icon"], link[rel="apple-touch-icon"]')) {
+      l.setAttribute("href", l.getAttribute("href").replace(/(-(dusk|mono))?\.png$/, (t === "green" ? "" : `-${t}`) + ".png"));
+    }
+    for (const img of document.querySelectorAll(".brand-icon")) img.setAttribute("src", `img/brand-${t}.png`);
     for (const b of document.querySelectorAll(".theme-opt")) b.setAttribute("aria-checked", String(b.dataset.theme === t));
+    $("mode-toggle").setAttribute("aria-checked", String(m === "night"));
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#0d140f");
-    try { localStorage.setItem("tn-theme", t); } catch (e) { /* private mode: theme just isn't remembered */ }
+    if (meta) meta.setAttribute("content", getComputedStyle(root).getPropertyValue("--bg").trim() || "#0d140f");
+    try { localStorage.setItem("tn-theme", t); localStorage.setItem("tn-mode", m); } catch (e) { /* private mode: theme just isn't remembered */ }
   }
+  const currentMode = () => (document.documentElement.getAttribute("data-mode") === "day" ? "day" : "night");
+  const currentTheme = () => document.documentElement.getAttribute("data-theme") || "green";
 
   // ---------- speech model status (side menu) ----------
 
   function renderModelStatus() {
     const ready = stt.isReady();
     const note = $("model-status");
-    note.textContent = ready ? (state.bundled ? "Installed with the app. Works offline." : "Ready. Works offline on this phone.") : "Not downloaded yet. About 80 MB, once, with signal. After that it works offline.";
+    note.textContent = ready ? (state.bundled ? "Installed with the app. Works offline." : "Downloaded for offline use") : "Not downloaded yet. About 80 MB, once, with signal. After that it works offline.";
     note.classList.toggle("ready", ready);
     $("model-btn").hidden = ready;
   }
@@ -1962,13 +2343,19 @@
   }
 
   async function start() {
-    let saved = "green";
-    try { saved = localStorage.getItem("tn-theme") || "green"; } catch (e) { /* ignore */ }
-    applyTheme(saved);
+    let saved = "green", savedMode = "night";
+    try { saved = localStorage.getItem("tn-theme") || "green"; savedMode = localStorage.getItem("tn-mode") || "night"; } catch (e) { /* ignore */ }
+    applyTheme(saved, savedMode);
 
     document.querySelectorAll(".menu-btn").forEach((b) => b.addEventListener("click", () => setDrawer(true)));
     $("scrim").addEventListener("click", () => setDrawer(false));
-    document.querySelectorAll(".theme-opt").forEach((b) => b.addEventListener("click", () => applyTheme(b.dataset.theme)));
+    document.querySelectorAll(".theme-opt").forEach((b) => b.addEventListener("click", () => applyTheme(b.dataset.theme, currentMode())));
+    $("mode-toggle").addEventListener("click", () => applyTheme(currentTheme(), currentMode() === "day" ? "night" : "day"));
+    $("theme-btn").addEventListener("click", () => {
+      const menu = $("theme-menu");
+      menu.hidden = !menu.hidden;
+      $("theme-btn").setAttribute("aria-expanded", String(!menu.hidden));
+    });
     $("model-btn").addEventListener("click", downloadModel);
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
@@ -2024,6 +2411,15 @@
     $("mic-btn").addEventListener("click", toggleMic);
     $("translate-btn").addEventListener("click", processRecordings);
     $("marker-btn").addEventListener("click", showMarker);
+    $("timing-btn").addEventListener("click", async () => {
+      const card = state.current;
+      const btn = $("timing-btn");
+      btn.disabled = true;
+      if (TN.timing.stateOf(card) === "running") await pauseTiming(card); else await startTiming(card);
+      renderTiming();
+    });
+    $("clock-btn").addEventListener("click", checkCameraClock);
+    setInterval(() => { if (state.view === "card" && state.current && TN.timing.stateOf(state.current) === "running") renderTiming(); }, 1000);
     let fromTimer = null;
     $("start-from").addEventListener("input", () => {
       clearTimeout(fromTimer);
@@ -2034,7 +2430,6 @@
     $("marker-wrap").addEventListener("click", hideMarker);
     window.addEventListener("resize", () => { if (!$("marker-wrap").hidden) showMarkerAgain(); });
     TN.marker.assets().catch(() => {});   // load the marker images early so they're ready offline
-    $("process-btn").addEventListener("click", () => processText($("said").value));
     $("poi-add").addEventListener("click", addPoi);
     $("sheet-close").addEventListener("click", closeSheet);
     $("sheet-wrap").addEventListener("click", (e) => { if (e.target === $("sheet-wrap") && !$("sheet-close").hidden) closeSheet(); });
@@ -2114,7 +2509,7 @@
     $("complete-btn").addEventListener("click", completeTrail);
     $("abandon-btn").addEventListener("click", abandonTrail);
     $("reopen-btn").addEventListener("click", async () => {
-      delete state.current.status; delete state.current.abandonReason;
+      delete state.current.status; delete state.current.abandonReason; delete state.current.outcome;
       await saveCard();
       renderCard();
       toast("Trail reopened");
@@ -2140,7 +2535,63 @@
       tweaking = false;
     }).observe(document.body, { childList: true, characterData: true, subtree: true });
     $("sync-btn").addEventListener("click", () => runSync(false));
-    $("drawer-switch").addEventListener("click", () => { drive.signOut(); drive.signIn(true); });   // Google asks which account
+    $("area-vehicle").addEventListener("change", async () => {
+      if (!state.area) return;
+      state.area.vehicle = $("area-vehicle").value;
+      await saveAreas();
+      for (const c of state.cards.values()) if (c.finishedAt || c.updatedAt) { c.updatedAt = Date.now(); await db.put("areacards", c); }   // so the trails sync again with the new vehicle
+      renderSync().catch(() => {});
+    });
+    $("report-btn").addEventListener("click", () => {
+      const v = $("app-version").textContent;
+      const body = ["What went wrong?", "", "", "", "---", `${v} · ${navigator.userAgent}`, "(Nothing else is sent: no answers, recordings or sign-in details.)"].join("\n");
+      setDrawer(false);
+      location.href = `mailto:${TN.config.REPORT_TO || ""}?subject=${encodeURIComponent("Trail Notes problem")}&body=${encodeURIComponent(body)}`;
+    });
+    // Checking for the latest version: the visible "Check for updates" button in the menu, and the invisible tap area over the version number.
+    const verNum = (t) => (String(t).match(/(\d+)\.(\d+)\.(\d+)/) || []).slice(1, 4).map(Number);
+    const verNewer = (a, b) => { for (let i = 0; i < 3; i++) if ((a[i] || 0) !== (b[i] || 0)) return (a[i] || 0) > (b[i] || 0); return false; };
+    let verBusy = false;
+    /** Fetch the new version: refresh the saved copy of the app, then reload. */
+    async function fetchNewVersion() {
+      const reg = "serviceWorker" in navigator ? await navigator.serviceWorker.getRegistration() : null;
+      let swapped = false;
+      if (reg) {
+        if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("controllerchange", () => { swapped = true; }, { once: true });
+        reg.update().catch(() => {});
+        for (let i = 0; i < 24 && !swapped; i++) await new Promise((r) => setTimeout(r, 250));   // the normal update path reloads on its own
+        if (swapped) return;
+      }
+      // Fallback: throw away the saved copy of the app files (never the speech model) and reload from the network.
+      try { for (const k of await caches.keys()) if (/^trail-notes-v/.test(k)) await caches.delete(k); } catch (e) { /* ignore */ }
+      location.reload();
+    }
+    async function checkForUpdate() {
+      if (verBusy) return;
+      verBusy = true;
+      try {
+        const mine = verNum($("app-version").textContent);
+        if (!navigator.onLine) { toast("Can't check for updates without signal."); return; }
+        let theirs;
+        try {
+          const res = await fetch(`version.json?t=${Date.now()}`, { cache: "no-store" });
+          if (!res.ok) throw new Error("status " + res.status);
+          theirs = verNum((await res.json()).version);
+          if (theirs.length !== 3 || theirs.some(Number.isNaN)) throw new Error("bad file");
+        } catch (e) { toast("Couldn't check for updates. Try again later."); return; }
+        const label = (v) => v.join(".");
+        if (verNewer(theirs, mine)) {
+          if (rec || !$("sheet-wrap").hidden) { toast(`Version ${label(theirs)} is available. Finish what you're doing, then check again.`); return; }
+          toast(`Version ${label(theirs)} is available. Updating now.`);
+          await fetchNewVersion();
+        } else if (verNewer(mine, theirs)) toast(`This copy (${label(mine)}) is newer than the published version (${label(theirs)}).`);
+        else toast(`You have the latest version (${label(mine)}).`);
+      } finally { verBusy = false; }
+    }
+    document.querySelectorAll(".ver-hit").forEach((b) => b.addEventListener("click", checkForUpdate));
+    $("update-btn").addEventListener("click", () => { setDrawer(false); checkForUpdate(); });
+    $("hall-open").addEventListener("click", () => { setDrawer(false); show("hall"); renderHall(); });
+    $("hall-back").addEventListener("click", () => { show("areas"); });
     $("drawer-signout").addEventListener("click", async () => { drive.signOut(); setDrawer(false); await renderSync(); toast("Signed out of Google."); });
     const back = drive.handleReturn();
     renderNet();
@@ -2149,7 +2600,7 @@
 
     // Ask the phone to keep our data (installed apps usually get this).
     if (navigator.storage && navigator.storage.persist) {
-      navigator.storage.persist().then((ok) => { if (ok) $("storage-note").textContent = "Saved on this device · kept safe"; }).catch(() => {});
+      navigator.storage.persist().catch(() => {});
     }
 
     state.areas = (await db.get("kv", "areas")) || [];
@@ -2157,6 +2608,7 @@
     state.sheetAreas = (await db.get("kv", "sheetAreas")) || [];
     state.sheetCheckedAt = (await db.get("kv", "sheetCheckedAt")) || 0;
     state.sheetCounts = (await db.get("kv", "sheetCounts")) || {};
+    state.removedAreas = (await db.get("kv", "removedAreas")) || [];
     state.sheetError = "";
     await migrateOldList();
     await restoreCompleted();

@@ -27,6 +27,7 @@
     try { return JSON.parse(get(KEY) || "null"); } catch (e) { return null; }
   }
   const tokenValid = () => { const t = stored(); return !!(t && t.token && t.exp > Date.now() + 120000); };
+  const accessToken = () => { const t = stored(); return t && t.token && tokenValid() ? t.token : ""; };
   const linked = () => get(LINKED) === "1";
 
   function signIn(pickAccount) {
@@ -152,6 +153,19 @@
     return data.length;
   }
 
+  /** The choices in the sheet's "Trail ridden with" dropdown (column M, first row under the header) for one tab, or null if they can't be read. */
+  async function vehicleOptions(sheetId, tab) {
+    if (!sheetId || !tab) return null;
+    const q = `'${String(tab).replace(/'/g, "''")}'!M2`;
+    const url = `https://sheets.googleapis.com/v4/spreadsheets/${sheetId}?ranges=${encodeURIComponent(q)}&fields=${encodeURIComponent("sheets(data(rowData(values(dataValidation))))")}`;
+    const got = await call(url);
+    const cond = (((((got.sheets || [])[0] || {}).data || [])[0] || {}).rowData || [])[0];
+    const v = cond && cond.values && cond.values[0] && cond.values[0].dataValidation && cond.values[0].dataValidation.condition;
+    if (!v || v.type !== "ONE_OF_LIST") return null;
+    const list = (v.values || []).map((x) => x.userEnteredValue).filter((x) => x != null && String(x).trim());
+    return list.length ? list : null;
+  }
+
   /** files = [{ name, json, done? }]. Calls onEach(index) after each one lands. */
   async function upload(files, onEach) {
     const folder = await folderId();
@@ -161,5 +175,5 @@
     }
   }
 
-  (root.TN = root.TN || {}).drive = { linked, tokenValid, signIn, handleReturn, signOut, upload, canEditSheets, markStatus, redirectUri, fetchAccount, account, folderUrl };
+  (root.TN = root.TN || {}).drive = { linked, tokenValid, accessToken, signIn, handleReturn, signOut, upload, canEditSheets, markStatus, vehicleOptions, redirectUri, fetchAccount, account, folderUrl };
 })(self);

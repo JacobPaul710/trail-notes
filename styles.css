@@ -520,3 +520,10 @@ button > .spinner.sm { display: inline-block; vertical-align: middle; width: 24p
 .hall-tile b { display: block; font-size: 20px; color: var(--red); }
 .hall-tile span { font-size: 10px; }
 .hall-ranks { font-size: 13px; line-height: 1.8; margin-bottom: 12px; }
+
+/* The Hall of Scouts button: stands out from the plain menu buttons */
+.hall-launch { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 0 14px; border-radius: 12px; border: 2px solid #e8a33d; background: linear-gradient(135deg, #5a3e17, #2d1c08); color: #ffd166; text-align: left; cursor: pointer; box-shadow: 0 0 12px rgba(232, 163, 61, .45); }
+.hall-launch svg { width: 28px; height: 28px; flex: none; fill: none; stroke: #ffd166; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.hall-launch span { display: flex; flex-direction: column; line-height: 1.25; }
+.hall-launch b { font-size: 16px; letter-spacing: .5px; }
+.hall-launch small { font-size: 12px; color: #f4e3b0; }

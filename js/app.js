@@ -373,6 +373,7 @@
       hallBoard();
     } catch (e) {
       if (e.code === "AUTH") { B.signOut(); return hallMsg("Your sign-in ran out. Tap to sign in again.", "Sign in with Google", () => drive.signIn(true)); }
+      if (/^Firebase said/.test(e.message || "")) return hallMsg(`${e.message} Signing in with Google again usually fixes this.`, "Sign in with Google again", () => drive.signIn(true));
       hallMsg(e.message || "Something went wrong.", "Try again", renderHall);
     }
   }
@@ -511,7 +512,8 @@
     const all = await db.all("areacards");
     const list = $("area-list");
     list.textContent = "";
-    $("no-areas").hidden = state.areas.length > 0;
+    const shown = state.areas.filter((x) => x.trails.length);   // a location with no trails yet stays off Home until it has some
+    $("no-areas").hidden = shown.length > 0;
     renderSheetPanel();
     let allDone = 0, allTrails = 0;
     const S = TN.states;
@@ -536,7 +538,7 @@
       b.addEventListener("click", () => openArea(a.id));
       return b;
     };
-    const groups = S.group(state.areas);
+    const groups = S.group(shown);
     for (const g of groups) {
       const box = el("div", "state-group");
       const head = el("div", "state-head");
@@ -822,6 +824,7 @@
     for (const name of addable().filter((n) => !(state.removedAreas || []).includes(n))) {
       try {
         const r = parse.rowsToTrails(await fetchRows(state.sheetLink, name));
+        if (!r.trails.length) continue;   // no trails on its tab yet: it shows up once it has some
         await createArea(name, r.trails, state.sheetLink, name, true);
       } catch (e) {
         toast(e.message);

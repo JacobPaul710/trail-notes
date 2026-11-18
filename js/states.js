@@ -17,6 +17,9 @@
   function parseArea(name) {
     const m = String(name || "").trim().match(/^([A-Za-z]{2})\s*[-\u2013\u2014]\s*(.+)$/);
     if (m && NAMES[m[1].toUpperCase()]) return { code: m[1].toUpperCase(), short: m[2].trim() };
+    // "CA Tahoe" (capital letters, a space, no dash) counts too. Mixed case like "Mt Hood" does not, so it can't turn into Montana.
+    const sp = String(name || "").trim().match(/^([A-Z]{2})\s+(.+)$/);
+    if (sp && NAMES[sp[1]]) return { code: sp[1], short: sp[2].trim() };
     return { code: "", short: String(name || "").trim() };
   }
 

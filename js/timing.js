@@ -9,9 +9,10 @@
   const segs = (card) => (card && Array.isArray(card.segments) ? card.segments : []);
   const openSeg = (card) => segs(card).find((s) => s.end == null) || null;
 
-  /** "none" (never started) | "running" | "paused" */
+  /** "none" (never started) | "running" | "paused" | "stopped" (Stop was tapped: finished timing) */
   function stateOf(card) {
     if (openSeg(card)) return "running";
+    if (card && card.timingStoppedAt && segs(card).length) return "stopped";
     return segs(card).length ? "paused" : "none";
   }
 
@@ -29,6 +30,26 @@
     s.end = Math.max(now, s.start);
     if (s.end === s.start) card.segments = segs(card).filter((x) => x !== s);
     return true;
+  }
+
+  /** Stop (like a stopwatch's Stop): ends the timing for good. Closes the running stretch if there is one. */
+  function stop(card, now) {
+    if (!segs(card).length) return false;
+    pause(card, now);
+    const list = segs(card);
+    card.timingStoppedAt = list.length ? list[list.length - 1].end : now;
+    return true;
+  }
+
+  /** The timing as a plain log: [{ label, at }] such as "Trail started" at 9:14. The last stretch's end reads "finished" once the trail is stopped or done. */
+  function log(card, finished) {
+    const out = [];
+    const list = segs(card);
+    list.forEach((s, i) => {
+      out.push({ label: i === 0 ? "Trail started" : "Trail resumed", at: s.start });
+      if (s.end != null) out.push({ label: i === list.length - 1 && (finished || card.timingStoppedAt) ? "Trail finished" : "Trail paused", at: s.end });
+    });
+    return out;
   }
 
   /** The running trail among cards, or null. */
@@ -73,7 +94,7 @@
     return Number.isFinite(ms) ? ms : null;
   }
 
-  const api = { parseCameraClock, stateOf, start, pause, running, paused, windows, totalMs, clock, forExport };
+  const api = { parseCameraClock, stateOf, start, pause, stop, log, running, paused, windows, totalMs, clock, forExport };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else (root.TN = root.TN || {}).timing = api;
 })(typeof self !== "undefined" ? self : this);

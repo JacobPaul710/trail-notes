@@ -304,6 +304,7 @@
     if (g) {
       g.textContent = drive.linked() ? `Signed in${drive.account() ? ` as ${drive.account()}` : ""}. Trails save to the Trail Notes folder in your Drive.` : "Not signed in.";
       $("drawer-signout").hidden = !drive.linked();
+      $("drawer-signin").hidden = drive.linked();
     }
   }
 
@@ -359,7 +360,7 @@
     const B = TN.board;
     if (!B.ready()) return hallMsg("The Hall of Scouts isn't set up yet.");
     if (!navigator.onLine) return hallMsg("The Hall of Scouts needs signal. Try again when you're back online.", "Try again", renderHall);
-    if (!drive.tokenValid()) return hallMsg("Sign in with Google to join the Hall of Scouts. Your Google account is how you sign in and how you recover your name.", "Sign in with Google", () => drive.signIn());
+    if (!drive.tokenValid()) return hallMsg("Sign in with Google to join the Hall of Scouts. Your Google account is how you sign in and how you recover your name.", "Sign in with Google", () => drive.signIn(true));
     hallMsg("Loading…");
     try {
       if (!B.signedIn()) await B.signIn(drive.accessToken());
@@ -449,7 +450,7 @@
     if (!navigator.onLine) { if (!quiet) notice("No signal", "Sync needs signal. Your trails are safe on this phone and will send when you're back online."); return; }
     if (!drive.tokenValid()) {
       if (quiet) return;               // never yank you out of the app on its own
-      drive.signIn();                  // Google asks once, then sends you straight back and it syncs
+      drive.signIn(true);              // Google asks once, then sends you straight back and it syncs
       return;
     }
     const all = await db.all("areacards");
@@ -1466,20 +1467,23 @@
     const card = state.current;
     if (!card) return;
     const st = TN.timing.stateOf(card);
-    const fin = card.status === "done" || card.status === "abandoned";
-    const btn = $("timing-btn");
+    const done = card.status === "done" || card.status === "abandoned";
+    const btn = $("timing-btn"), stop = $("timing-stop");
     const label = $("timing-state");
-    $("timing-panel").hidden = fin && st === "none";
-    btn.disabled = fin;
+    $("timing-panel").hidden = done && st === "none";
+    btn.hidden = st === "stopped";
+    btn.disabled = done;
     btn.textContent = st === "running" ? "Pause" : st === "paused" ? "Resume" : "Start";
     btn.className = st === "running" ? "btn-warn wide" : "btn-primary wide";
+    stop.hidden = !(st === "running" || st === "paused");
     label.className = `timing-state${st === "running" ? " running" : ""}`;
-    const segs = TN.timing.windows(card, Date.now());
     const total = TN.timing.clock(TN.timing.totalMs(card, Date.now()));
-    label.textContent = st === "running" ? `Recording · ${total}` : st === "paused" ? `Paused · ${total}` : "Not started";
-    $("timing-note").textContent = st === "none"
-      ? "Tap Start when you tap Start in onX. Pause at a fork, Resume when you're back on this trail."
-      : `${plural(segs.length, "stretch", "stretches")} so far. Started ${hm(segs[0].start)}.`;
+    label.textContent = st === "running" ? `Recording · ${total}` : st === "paused" ? `Paused · ${total}` : st === "stopped" ? `Finished · ${total}` : "Not started";
+    $("timing-note").hidden = st !== "none";
+    const log = $("timing-log");
+    const lines = TN.timing.log(card, done);
+    log.hidden = !lines.length;
+    log.replaceChildren(...lines.map((l) => { const li = el("li"); li.append(el("span", "", l.label), el("b", "", hm(l.at))); return li; }));
     $("clock-note").textContent = state.clockNote || "";
   }
 
@@ -2422,6 +2426,15 @@
       renderTiming();
     });
     $("clock-btn").addEventListener("click", checkCameraClock);
+    $("timing-stop").addEventListener("click", async () => {
+      const card = state.current;
+      if (!card) return;
+      if (!(await confirmAsk("Stop timing this trail?", "Stop ends the timing for good. You can't resume it afterward.", "Stop"))) return;
+      TN.timing.stop(card, Date.now());
+      await putTimed(card);
+      renderTiming();
+      await renderTimingStrip();
+    });
     setInterval(() => { if (state.view === "card" && state.current && TN.timing.stateOf(state.current) === "running") renderTiming(); }, 1000);
     let fromTimer = null;
     $("start-from").addEventListener("input", () => {
@@ -2595,8 +2608,10 @@
     $("update-btn").addEventListener("click", () => { setDrawer(false); checkForUpdate(); });
     $("hall-open").addEventListener("click", () => { setDrawer(false); show("hall"); renderHall(); });
     $("hall-back").addEventListener("click", () => { show("areas"); });
-    $("drawer-signout").addEventListener("click", async () => { drive.signOut(); setDrawer(false); await renderSync(); toast("Signed out of Google."); });
+    $("drawer-signout").addEventListener("click", async () => { drive.signOut(); TN.board.signOut(); try { localStorage.removeItem("tn-board-name"); } catch (e) { /* ignore */ } setDrawer(false); await renderSync(); toast("Signed out of Google."); });
+    $("drawer-signin").addEventListener("click", () => drive.signIn(true));   // always lets you pick the account
     const back = drive.handleReturn();
+    if (back === "signed-in") { TN.board.signOut(); try { localStorage.removeItem("tn-board-name"); } catch (e) { /* ignore */ } }
     renderNet();
     renderModelStatus();
     if (stt.checkBundled) stt.checkBundled().then((b) => { if (b) { state.bundled = true; renderModelStatus(); } });

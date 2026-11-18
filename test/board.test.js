@@ -104,3 +104,24 @@ test("an expired Firebase token is refreshed; a refused refresh means sign in ag
   await assert.rejects(B.me(), (e) => e.code === "AUTH");
   assert.equal(B.signedIn(), false);
 });
+
+// ---- trail timing log and Stop ----
+test("timing log reads like a stopwatch: started, paused, resumed, finished", () => {
+  global.TN.timing = undefined;
+  const T = require("../js/timing.js");
+  const c = {};
+  const t0 = 1000000;
+  T.start(c, t0);
+  assert.equal(T.stateOf(c), "running");
+  T.pause(c, t0 + 600000);
+  T.start(c, t0 + 900000);
+  assert.equal(T.stop(c, t0 + 1500000), true);
+  assert.equal(T.stateOf(c), "stopped");
+  assert.deepEqual(T.log(c, false).map((l) => l.label), ["Trail started", "Trail paused", "Trail resumed", "Trail finished"]);
+  assert.equal(T.paused([c]).length, 0);   // a stopped trail is not in the Resume list
+  assert.equal(T.totalMs(c, t0 + 9999999), 1200000);
+  // a trail finished from the app (status done) with no Stop also ends with "finished"
+  const d = {}; T.start(d, t0); T.pause(d, t0 + 1000);
+  assert.deepEqual(T.log(d, true).map((l) => l.label), ["Trail started", "Trail finished"]);
+  assert.deepEqual(T.log(d, false).map((l) => l.label), ["Trail started", "Trail paused"]);
+});

@@ -339,6 +339,18 @@
 
   // ---------- Hall of Scouts (team leaderboard) ----------
   const hall = { tab: "longest", scouts: [], mine: null, open: null };
+  const HALL_THEMES = [["mmorpg", "MMORPG"], ["trail", "Oregon Trail"], ["arcade", "Arcade"]];
+  const hallTheme = () => { try { const t = localStorage.getItem("tn-hall-theme"); return HALL_THEMES.some(([k]) => k === t) ? t : "mmorpg"; } catch (e) { return "mmorpg"; } };
+  const applyHallTheme = () => { $("view-hall").dataset.theme = hallTheme(); };
+  function hallThemePicker() {
+    const row = el("div", "hall-themes");
+    for (const [k, label] of HALL_THEMES) {
+      const b = el("button", "", label); b.type = "button"; b.setAttribute("aria-pressed", String(hallTheme() === k));
+      b.addEventListener("click", () => { try { localStorage.setItem("tn-hall-theme", k); } catch (e) { /* ignore */ } applyHallTheme(); hallBoard(); });
+      row.append(b);
+    }
+    return row;
+  }
   const fmtVal = (tab, s) => tab.unit === "mi" ? `${Number(s[tab.field]).toLocaleString(undefined, { maximumFractionDigits: 2 })} mi` : `${s[tab.field]}`;
   async function myStats() { return TN.board.computeStats(await db.all("areacards")); }
 
@@ -426,7 +438,7 @@
       }
       table.append(row);
     }
-    body.replaceChildren(el("div", "hall-title", "~ Hall of Scouts ~"), el("div", "hall-sub", `Team of ${hall.scouts.length} ${hall.scouts.length === 1 ? "scout" : "scouts"}`), tabs, table);
+    body.replaceChildren(el("div", "hall-title", "~ Hall of Scouts ~"), el("div", "hall-sub", `Team of ${hall.scouts.length} ${hall.scouts.length === 1 ? "scout" : "scouts"}`), hallThemePicker(), tabs, table);
   }
 
   function hallProfile(s) {
@@ -2606,7 +2618,7 @@
     }
     document.querySelectorAll(".ver-hit").forEach((b) => b.addEventListener("click", checkForUpdate));
     $("update-btn").addEventListener("click", () => { setDrawer(false); checkForUpdate(); });
-    $("hall-open").addEventListener("click", () => { setDrawer(false); show("hall"); renderHall(); });
+    $("hall-open").addEventListener("click", () => { setDrawer(false); applyHallTheme(); show("hall"); renderHall(); });
     $("hall-back").addEventListener("click", () => { show("areas"); });
     $("drawer-signout").addEventListener("click", async () => { drive.signOut(); TN.board.signOut(); try { localStorage.removeItem("tn-board-name"); } catch (e) { /* ignore */ } setDrawer(false); await renderSync(); toast("Signed out of Google."); });
     $("drawer-signin").addEventListener("click", () => drive.signIn(true));   // always lets you pick the account

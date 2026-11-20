@@ -490,34 +490,41 @@ button > .spinner.sm { display: inline-block; vertical-align: middle; width: 24p
 .timing-row .tr-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .timing-row .tr-tag { font-size: 12px; color: var(--muted); display: block; }
 
-/* Hall of Scouts: always the parchment look, whatever theme the app is in */
-.hall { --paper: #d9c08a; --paper2: #e6d09b; --ink: #2d1c08; --brown: #5a3e17; --red: #7a1d0c; --cream: #f4e3b0; }
+/* Hall of Scouts: its own look (three themes), whatever theme the app is in */
+.hall { --bg: #2b2417; --panel: #3e3629; --rowa: #3e3629; --rowb: #483f31; --text: #ffffff; --title: #ff981f; --rank: #ffff00; --edge: #1a150c; --headbg: #1a150c; --headfg: #ff981f; --tabbg: #3a3224; --tabfg: #ff981f; --tabon: #5d5340; --tabonfg: #ffff00; --btnbg: #5d5340; --btnfg: #ffff00; --font: "Courier New", ui-monospace, monospace; --shadow: 1px 1px 0 #000; --frame: 3px solid var(--edge); --glow: none; }
+.hall[data-theme="trail"] { --bg: #0000aa; --panel: #0000aa; --rowa: #0000aa; --rowb: #0a0ac0; --text: #ffffff; --title: #ffff55; --rank: #55ffff; --edge: #ffffff; --headbg: #55ffff; --headfg: #0000aa; --tabbg: #0000aa; --tabfg: #ffffff; --tabon: #ffff55; --tabonfg: #0000aa; --btnbg: #ffff55; --btnfg: #0000aa; --shadow: none; --frame: 4px double #ffffff; }
+.hall[data-theme="arcade"] { --bg: #1b0b3a; --panel: rgba(20, 5, 45, .6); --rowa: rgba(255, 113, 206, .10); --rowb: rgba(125, 249, 255, .08); --text: #ffd1f0; --title: #fff176; --rank: #7df9ff; --edge: #ff71ce; --headbg: #ff71ce; --headfg: #1b0b3a; --tabbg: transparent; --tabfg: #ffd1f0; --tabon: #7df9ff; --tabonfg: #1b0b3a; --btnbg: #ff71ce; --btnfg: #1b0b3a; --shadow: 0 0 6px currentColor; --frame: 3px solid #ff71ce; --glow: 0 0 14px rgba(255, 113, 206, .55); }
 .hall .page { padding-top: 6px; }
-.hall-scroll { background: var(--paper); color: var(--ink); border: 4px double var(--brown); padding: 14px 12px 16px; font-family: "Courier New", ui-monospace, monospace; font-weight: 700; }
-.hall-title { text-align: center; font-size: 22px; color: #5a1f0f; margin: 2px 0; }
+.hall-scroll { position: relative; background: var(--bg); color: var(--text); border: var(--frame); box-shadow: var(--glow); padding: 14px 12px 16px; font-family: var(--font); font-weight: 700; text-shadow: var(--shadow); }
+.hall[data-theme="arcade"] .hall-scroll { background: linear-gradient(#1b0b3a, #5a1763 60%, #ff5f6d); }
+.hall[data-theme="arcade"] .hall-scroll::after { content: ""; position: absolute; inset: 0; pointer-events: none; background-image: repeating-linear-gradient(rgba(0, 0, 0, .28) 0 1px, transparent 1px 3px); }
+.hall-title { text-align: center; font-size: 22px; color: var(--title); margin: 2px 0; }
 .hall-sub { text-align: center; font-size: 12px; margin-bottom: 12px; }
+.hall-themes { display: flex; justify-content: center; gap: 6px; margin-bottom: 10px; }
+.hall-themes button { font: inherit; font-size: 11px; padding: 4px 8px; border: 2px solid var(--edge); background: transparent; color: var(--text); text-shadow: inherit; cursor: pointer; }
+.hall-themes button[aria-pressed="true"] { background: var(--tabon); color: var(--tabonfg); text-shadow: none; }
 .hall-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; }
-.hall-tab { font: inherit; font-size: 12px; padding: 6px 8px; border: 2px solid var(--brown); background: #c9ad72; color: var(--ink); cursor: pointer; }
-.hall-tab[aria-selected="true"] { background: var(--brown); color: var(--cream); }
-.hall-table { border: 3px solid var(--brown); }
+.hall-tab { font: inherit; font-size: 12px; padding: 6px 8px; border: 2px solid var(--edge); background: var(--tabbg); color: var(--tabfg); text-shadow: inherit; cursor: pointer; }
+.hall-tab[aria-selected="true"] { background: var(--tabon); color: var(--tabonfg); text-shadow: none; }
+.hall-table { border: var(--frame); background: var(--panel); }
 .hall-head, .hall-row-main { display: flex; gap: 8px; padding: 8px; font-size: 14px; align-items: center; }
-.hall-head { background: #8a6a35; color: var(--cream); font-size: 12px; }
-.hall-r { width: 36px; color: var(--red); }
+.hall-head { background: var(--headbg); color: var(--headfg); font-size: 12px; text-shadow: none; }
+.hall-r { width: 36px; color: var(--rank); }
 .hall-n { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hall-row { background: var(--paper2); }
-.hall-row:nth-child(even) { background: var(--paper); }
-.hall-row.me { outline: 2px solid var(--red); outline-offset: -2px; }
-.hall-row-main { width: 100%; border: 0; background: transparent; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.hall-row { background: var(--rowa); }
+.hall-row:nth-child(even) { background: var(--rowb); }
+.hall-row.me { outline: 2px solid var(--rank); outline-offset: -2px; }
+.hall-row-main { width: 100%; border: 0; background: transparent; font: inherit; color: inherit; text-shadow: inherit; text-align: left; cursor: pointer; }
 .hall-more { padding: 0 8px 8px 52px; }
-.hall-btn { font: inherit; font-size: 13px; padding: 8px 12px; border: 2px solid var(--brown); background: var(--brown); color: var(--cream); cursor: pointer; }
-.hall-btn.alt { background: transparent; color: var(--ink); }
+.hall-btn { font: inherit; font-size: 13px; padding: 8px 12px; border: 2px solid var(--edge); background: var(--btnbg); color: var(--btnfg); text-shadow: none; cursor: pointer; }
+.hall-btn.alt { background: transparent; color: var(--text); text-shadow: inherit; }
 .hall-msg { text-align: center; margin: 14px 4px; font-size: 14px; line-height: 1.5; }
 .hall-form { display: flex; flex-direction: column; gap: 10px; align-items: stretch; margin: 12px 0; }
-.hall-form input { font: inherit; font-size: 16px; padding: 10px; border: 2px solid var(--brown); background: var(--cream); color: var(--ink); }
-.hall-err { color: var(--red); font-size: 13px; min-height: 1em; }
+.hall-form input { font: inherit; font-size: 16px; padding: 10px; border: 2px solid var(--edge); background: #fff; color: #000; text-shadow: none; }
+.hall-err { color: var(--rank); font-size: 13px; min-height: 1em; }
 .hall-tiles { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-bottom: 12px; }
-.hall-tile { background: var(--paper2); border: 2px solid var(--brown); padding: 8px 4px; text-align: center; }
-.hall-tile b { display: block; font-size: 20px; color: var(--red); }
+.hall-tile { background: var(--rowb); border: 2px solid var(--edge); padding: 8px 4px; text-align: center; }
+.hall-tile b { display: block; font-size: 20px; color: var(--rank); }
 .hall-tile span { font-size: 10px; }
 .hall-ranks { font-size: 13px; line-height: 1.8; margin-bottom: 12px; }
 
